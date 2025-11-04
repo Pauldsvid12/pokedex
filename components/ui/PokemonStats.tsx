@@ -46,27 +46,45 @@ export default function PokemonStats({ stats, mainType }: Props) {
     return statNames[name] || name;
   };
 
+  const calculateTotal = () => {
+    return stats.reduce((total, stat) => total + stat.baseStat, 0);
+  };
+
   return (
-    <View>
-      <Text className="text-gray-900 text-sm font-semibold mb-3">Estadísticas Base</Text>
-      {stats.map((stat, index) => (
-        <View key={index} className="mb-3">
-          <View className="flex-row justify-between items-center mb-1">
-            <Text className="text-gray-700 text-xs font-bold">
-              {getStatName(stat.name)}
-            </Text>
-            <Text className="text-gray-900 text-xs font-extrabold">
-              {stat.baseStat}
-            </Text>
+    <View className="mx-4 mb-6">
+      <Text className="text-white text-lg font-extrabold mb-3">Estadísticas Base</Text>
+      <View className="bg-white rounded-lg p-4">
+        {stats.map((stat, index) => (
+          <View key={index} className="mb-4">
+            <View className="flex-row justify-between items-center mb-1.5">
+              <Text className="text-gray-800 text-sm font-bold">
+                {getStatName(stat.name)}
+              </Text>
+              <Text className="text-gray-900 text-sm font-extrabold">
+                {stat.baseStat}
+              </Text>
+            </View>
+            <View className="w-full bg-gray-200 rounded-full h-3">
+              <View
+                className={`${getStatColor(mainType)} h-3 rounded-full`}
+                style={{ width: `${(stat.baseStat / 150) * 100}%` }}
+              />
+            </View>
           </View>
-          <View className="w-full bg-gray-200 rounded-full h-2.5">
-            <View
-              className={`${getStatColor(mainType)} h-2.5 rounded-full`}
-              style={{ width: `${(stat.baseStat / 150) * 100}%` }}
-            />
+        ))}
+        
+        {/* Total de estadísticas */}
+        <View className="mt-4 pt-4 border-t border-gray-300">
+          <View className="flex-row justify-between items-center">
+            <Text className="text-gray-800 text-sm font-bold">
+              Total
+            </Text>
+            <Text className="text-gray-900 text-sm font-extrabold">
+              {calculateTotal()}
+            </Text>
           </View>
         </View>
-      ))}
+      </View>
     </View>
   );
 }

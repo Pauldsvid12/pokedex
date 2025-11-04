@@ -1,6 +1,8 @@
 import { View, Text, FlatList, Image, TextInput, TouchableOpacity, ActivityIndicator } from 'react-native';
-import { useState, useEffect } from 'react';
 import { useRouter } from 'expo-router';
+import { useState, useEffect } from 'react';
+import GenerationModal from '../components/ui/GenerationModal';
+import TypeModal from '../components/ui/TypeModal';
 
 interface Pokemon {
   id: number;
@@ -15,7 +17,10 @@ export default function Index() {
   const [filteredPokemons, setFilteredPokemons] = useState<Pokemon[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
-  const [activeTab, setActiveTab] = useState<'generaciones' | 'tipos'>('generaciones');
+  const [selectedGeneration, setSelectedGeneration] = useState<number | null>(null);
+  const [selectedType, setSelectedType] = useState<string | null>(null);
+  const [generationModalVisible, setGenerationModalVisible] = useState(false);
+  const [typeModalVisible, setTypeModalVisible] = useState(false);
   const router = useRouter();
 
   useEffect(() => {
@@ -23,44 +28,70 @@ export default function Index() {
   }, []);
 
   useEffect(() => {
-    if (searchQuery === '') {
-      setFilteredPokemons(pokemons);
-    } else {
-      const filtered = pokemons.filter(pokemon =>
-        pokemon.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        pokemon.id.toString().includes(searchQuery)
-      );
-      setFilteredPokemons(filtered);
-    }
-  }, [searchQuery, pokemons]);
+    filterPokemons();
+  }, [searchQuery, selectedGeneration, selectedType, pokemons]);
 
   const fetchPokemons = async () => {
     try {
-      const response = await fetch('https://pokeapi.co/api/v2/pokemon?limit=10000');
+      const response = await fetch('https://pokeapi.co/api/v2/pokemon?limit=1025');
       const data = await response.json();
       
       const pokemonDetails = await Promise.all(
-        data.results.map(async (pokemon: any, index: number) => {
-          const details = await fetch(pokemon.url);
-          const detailsData = await details.json();
-          
-          return {
-            id: detailsData.id,
-            name: detailsData.name,
-            types: detailsData.types.map((t: any) => t.type.name),
-            sprite: detailsData.sprites.other['official-artwork'].front_default,
-            generation: 1
-          };
+        data.results.map(async (pokemon: any) => {
+          try {
+            const details = await fetch(pokemon.url);
+            const detailsData = await details.json();
+
+            if (detailsData.id >= 1 && detailsData.id <= 1025) {
+              const generation = Math.ceil(detailsData.id / 151);
+
+              return {
+                id: detailsData.id,
+                name: detailsData.name,
+                types: detailsData.types.map((t: any) => t.type.name),
+                sprite: detailsData.sprites.other['official-artwork'].front_default,
+                generation: generation
+              };
+            }
+            return null;
+          } catch (error) {
+            return null;
+          }
         })
       );
-      
-      setPokemons(pokemonDetails);
-      setFilteredPokemons(pokemonDetails);
+
+      const filtered = pokemonDetails.filter((p): p is Pokemon => p !== null);
+      setPokemons(filtered);
+      setFilteredPokemons(filtered);
       setLoading(false);
     } catch (error) {
       console.error('Error fetching pokemons:', error);
       setLoading(false);
     }
+  };
+
+  const filterPokemons = () => {
+    let result = pokemons;
+
+    // Filtro por búsqueda
+    if (searchQuery !== '') {
+      result = result.filter(pokemon =>
+        pokemon.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        pokemon.id.toString().includes(searchQuery)
+      );
+    }
+
+    // Filtro por generación
+    if (selectedGeneration !== null) {
+      result = result.filter(pokemon => pokemon.generation === selectedGeneration);
+    }
+
+    // Filtro por tipo
+    if (selectedType !== null) {
+      result = result.filter(pokemon => pokemon.types.includes(selectedType));
+    }
+
+    setFilteredPokemons(result);
   };
 
   const getTypeColor = (type: string): string => {
@@ -181,36 +212,61 @@ export default function Index() {
         />
       </View>
 
+      {/* Menú de filtros */}
       <View className="flex-row px-4 pb-3 gap-3">
         <TouchableOpacity
-          onPress={() => setActiveTab('generaciones')}
+          onPress={() => setGenerationModalVisible(true)}
           className={`flex-1 py-2 rounded-full ${
-            activeTab === 'generaciones' ? 'bg-white' : 'bg-red-600'
+            selectedGeneration ? 'bg-white' : 'bg-red-600'
           }`}
         >
           <Text
             className={`text-center font-bold text-sm ${
-              activeTab === 'generaciones' ? 'text-red-500' : 'text-white'
+              selectedGeneration ? 'text-red-500' : 'text-white'
             }`}
           >
-            GENERACIONES
+            {selectedGeneration ? `Gen ${selectedGeneration}` : 'GENERACIONES'}
           </Text>
         </TouchableOpacity>
         <TouchableOpacity
-          onPress={() => setActiveTab('tipos')}
+          onPress={() => setTypeModalVisible(true)}
           className={`flex-1 py-2 rounded-full ${
-            activeTab === 'tipos' ? 'bg-white' : 'bg-red-600'
+            selectedType ? 'bg-white' : 'bg-red-600'
           }`}
         >
           <Text
             className={`text-center font-bold text-sm ${
-              activeTab === 'tipos' ? 'text-red-500' : 'text-white'
+              selectedType ? 'text-red-500' : 'text-white'
             }`}
           >
-            TIPOS
+            {selectedType ? selectedType.toUpperCase() : 'TIPOS'}
           </Text>
         </TouchableOpacity>
       </View>
+
+      {/* Mostrar filtros activos */}
+      {(selectedGeneration || selectedType || searchQuery) && (
+        <View className="px-4 pb-2 flex-row flex-wrap gap-2">
+          {selectedGeneration && (
+            <TouchableOpacity
+              onPress={() => setSelectedGeneration(null)}
+              className="bg-white/20 rounded-full px-3 py-1 flex-row items-center gap-1"
+            >
+              <Text className="text-white text-xs font-bold">Gen {selectedGeneration}</Text>
+              <Text className="text-white text-lg">×</Text>
+            </TouchableOpacity>
+          )}
+          {selectedType && (
+            <TouchableOpacity
+              onPress={() => setSelectedType(null)}
+              className="bg-white/20 rounded-full px-3 py-1 flex-row items-center gap-1"
+            >
+              <Text className="text-white text-xs font-bold capitalize">{selectedType}</Text>
+              <Text className="text-white text-lg">×</Text>
+            </TouchableOpacity>
+          )}
+        </View>
+      )}
 
       <FlatList
         data={filteredPokemons}
@@ -218,6 +274,21 @@ export default function Index() {
         keyExtractor={(item) => item.id.toString()}
         contentContainerStyle={{ paddingHorizontal: 4, paddingBottom: 20 }}
         showsVerticalScrollIndicator={false}
+      />
+
+      {/* Modales */}
+      <GenerationModal
+        visible={generationModalVisible}
+        onClose={() => setGenerationModalVisible(false)}
+        onSelect={setSelectedGeneration}
+        selectedGeneration={selectedGeneration}
+      />
+
+      <TypeModal
+        visible={typeModalVisible}
+        onClose={() => setTypeModalVisible(false)}
+        onSelect={setSelectedType}
+        selectedType={selectedType}
       />
     </View>
   );
