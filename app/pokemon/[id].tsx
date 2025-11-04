@@ -1,8 +1,11 @@
-import { View, Text, ScrollView, Image, TouchableOpacity, ActivityIndicator, Animated, Linking } from 'react-native';
+import { View, Text, ScrollView, Image, TouchableOpacity, ActivityIndicator } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useState, useEffect } from 'react';
+import { Ionicons } from '@expo/vector-icons';
+import { Audio } from 'expo-av';
+import PokemonStats from '../../components/ui/PokemonStats';
 
-interface PokemonDetail {
+interface Pokemon {
   id: number;
   name: string;
   types: string[];
@@ -12,178 +15,201 @@ interface PokemonDetail {
   weight: number;
   description: string;
   cry: string;
-  stats: { name: string; value: number }[];
-  evolutionChain: EvolutionMember[];
+  stats: { name: string; baseStat: number }[];
+  abilities: string[];
+  evolutionChain: EvolutionChain[];
   varieties: Variety[];
-  megaEvolutions: MegaEvolution[];
+  baseSpeciesName: string;
 }
 
-interface EvolutionMember {
+interface EvolutionChain {
+  id: number;
+  name: string;
+  sprite: string;
+  types: string[];
+  method: string;
+}
+
+interface Variety {
   id: number;
   name: string;
   sprite: string;
   types: string[];
 }
 
-interface Variety {
-  name: string;
-  sprite: string;
-  types: string[];
-}
-
-interface MegaEvolution {
-  name: string;
-  sprite: string;
-  types: string[];
-}
-
-const typeColors: { [key: string]: string } = {
-  grass: '#78C850',
-  poison: '#A040A0',
-  fire: '#F08030',
-  water: '#6890F0',
-  normal: '#A8A878',
-  flying: '#A890F0',
-  bug: '#A8B820',
-  electric: '#F8D030',
-  ground: '#E0C068',
-  rock: '#B8A038',
-  ice: '#98D8D8',
-  fighting: '#C03028',
-  psychic: '#F85888',
-  dragon: '#7038F8',
-  dark: '#705848',
-  steel: '#B8B8D0',
-  fairy: '#EE99AC',
-};
-
 export default function PokemonDetail() {
   const { id } = useLocalSearchParams();
   const router = useRouter();
-  const [pokemon, setPokemon] = useState<PokemonDetail | null>(null);
+  const [pokemon, setPokemon] = useState<Pokemon | null>(null);
   const [loading, setLoading] = useState(true);
   const [showShiny, setShowShiny] = useState(false);
+  const [sound, setSound] = useState<Audio.Sound | null>(null);
 
   useEffect(() => {
-    fetchPokemonDetail();
+    fetchPokemonDetails();
+    return () => {
+      if (sound) {
+        sound.unloadAsync();
+      }
+    };
   }, [id]);
 
-  const fetchPokemonDetail = async () => {
+  const playCry = async () => {
     try {
-      const response = await fetch(`https://pokeapi.co/api/v2/pokemon/${id}`);
-      const data = await response.json();
+      if (sound) {
+        await sound.unloadAsync();
+      }
+      const { sound: newSound } = await Audio.Sound.createAsync({
+        uri: pokemon?.cry || '',
+      });
+      setSound(newSound);
+      await newSound.playAsync();
+    } catch (error) {
+      console.error('Error playing cry:', error);
+    }
+  };
 
-      const speciesResponse = await fetch(data.species.url);
+  const fetchPokemonDetails = async () => {
+    try {
+      setLoading(true);
+      const detailsResponse = await fetch(`https://pokeapi.co/api/v2/pokemon/${id}`);
+      const detailsData = await detailsResponse.json();
+
+      const speciesResponse = await fetch(detailsData.species.url);
       const speciesData = await speciesResponse.json();
 
       const description = speciesData.flavor_text_entries
-        ?.find((entry: any) => entry.language.name === 'es')?.flavor_text ||
-        speciesData.flavor_text_entries?.[0]?.flavor_text ||
-        'Sin descripción disponible';
+        .find((entry: any) => entry.language.name === 'es')?.flavor_text
+        .replace(/\f/g, ' ') || speciesData.flavor_text_entries[0]?.flavor_text || 'Sin descripción disponible';
 
+      // Obtener cadena evolutiva de la especie base
       const evolutionResponse = await fetch(speciesData.evolution_chain.url);
       const evolutionData = await evolutionResponse.json();
+      const evolutionChain = await parseEvolutionChain(evolutionData.chain, speciesData.id);
 
-      const varietiesData = speciesData.varieties || [];
-      const varieties: Variety[] = await Promise.all(
-        varietiesData.map(async (variety: any) => {
-          const varDetail = await fetch(variety.pokemon.url);
-          const varData = await varDetail.json();
-          return {
-            name: varData.name,
-            sprite: varData.sprites.other['official-artwork'].front_default,
-            types: varData.types.map((t: any) => t.type.name),
-          };
-        })
-      );
+      const varieties = await fetchVarieties(speciesData.id, speciesData.name);
 
-      const megaEvolutions = await getMegaEvolutions(data.name);
+      const stats = detailsData.stats.map((stat: any) => ({
+        name: stat.stat.name,
+        baseStat: stat.base_stat
+      }));
+
+      const abilities = detailsData.abilities.map((ability: any) => ability.ability.name);
+
+      // Obtener sonido del pokemon
+      const cry = detailsData.cries?.latest || detailsData.cries?.legacy || '';
 
       setPokemon({
-        id: data.id,
-        name: data.name,
-        types: data.types.map((t: any) => t.type.name),
-        sprite: data.sprites.other['official-artwork'].front_default,
-        shinySprite: data.sprites.other['official-artwork'].front_shiny,
-        height: data.height / 10,
-        weight: data.weight / 10,
-        description: description.replace(/\f/g, ' '),
-        cry: data.cries?.latest || '',
-        stats: data.stats.map((stat: any) => ({
-          name: stat.stat.name,
-          value: stat.base_stat,
-        })),
-        evolutionChain: await parseEvolutionChain(evolutionData.chain),
-        varieties,
-        megaEvolutions,
+        id: detailsData.id,
+        name: detailsData.name,
+        types: detailsData.types.map((t: any) => t.type.name),
+        sprite: detailsData.sprites.other['official-artwork'].front_default,
+        shinySprite: detailsData.sprites.other['official-artwork'].front_shiny || detailsData.sprites.other['official-artwork'].front_default,
+        height: detailsData.height / 10,
+        weight: detailsData.weight / 10,
+        description: description,
+        cry: cry,
+        stats: stats,
+        abilities: abilities,
+        evolutionChain: evolutionChain,
+        varieties: varieties,
+        baseSpeciesName: speciesData.name
       });
-
       setLoading(false);
     } catch (error) {
-      console.error('Error fetching pokemon detail:', error);
+      console.error('Error fetching pokemon details:', error);
       setLoading(false);
     }
   };
 
-  const getMegaEvolutions = async (pokemonName: string): Promise<MegaEvolution[]> => {
-    try {
-      const response = await fetch(`https://pokeapi.co/api/v2/pokemon-form?limit=10000`);
-      const data = await response.json();
-
-      const megaForms = data.results.filter((form: any) => 
-        form.name.includes(`${pokemonName}-mega`) || 
-        form.name.includes(`${pokemonName}-gigantamax`)
-      );
-
-      const megas: MegaEvolution[] = await Promise.all(
-        megaForms.map(async (form: any) => {
-          const formDetail = await fetch(form.url);
-          const formData = await formDetail.json();
-          return {
-            name: formData.name,
-            sprite: formData.sprites?.front_default || '',
-            types: formData.types?.map((t: any) => t.type.name) || [],
-          };
-        })
-      );
-
-      return megas;
-    } catch (error) {
-      return [];
-    }
-  };
-
-  const parseEvolutionChain = async (chain: any): Promise<EvolutionMember[]> => {
-    const members: EvolutionMember[] = [];
+  const parseEvolutionChain = async (chain: any, speciesId: number): Promise<EvolutionChain[]> => {
+    const evolutions: EvolutionChain[] = [];
 
     const processChain = async (node: any) => {
-      const response = await fetch(`https://pokeapi.co/api/v2/pokemon/${node.species.name}`);
-      const data = await response.json();
+      try {
+        const pokemonResponse = await fetch(`https://pokeapi.co/api/v2/pokemon/${node.species.name}`);
+        const pokemonData = await pokemonResponse.json();
 
-      members.push({
-        id: data.id,
-        name: data.name,
-        sprite: data.sprites.other['official-artwork'].front_default,
-        types: data.types.map((t: any) => t.type.name),
-      });
+        evolutions.push({
+          id: pokemonData.id,
+          name: node.species.name,
+          sprite: pokemonData.sprites.other['official-artwork'].front_default,
+          types: pokemonData.types.map((t: any) => t.type.name),
+          method: node.evolution_details[0]?.trigger.name || 'level-up'
+        });
 
-      if (node.evolves_to.length > 0) {
-        for (const evolution of node.evolves_to) {
-          await processChain(evolution);
+        for (const evolve of node.evolves_to) {
+          await processChain(evolve);
         }
+      } catch (error) {
+        console.error('Error processing evolution:', error);
       }
     };
 
     await processChain(chain);
-    return members;
+    return evolutions;
+  };
+
+  const fetchVarieties = async (speciesId: number, speciesName: string): Promise<Variety[]> => {
+    try {
+      const response = await fetch(`https://pokeapi.co/api/v2/pokemon-species/${speciesId}`);
+      const data = await response.json();
+
+      const varieties: Variety[] = [];
+      const baseForm = data.varieties.find((v: any) => v.is_main_series === true)?.pokemon.name || speciesName;
+
+      for (const variety of data.varieties || []) {
+        // Solo mostrar si es diferente de la forma base
+        if (variety.pokemon.name !== baseForm) {
+          try {
+            const varietyResponse = await fetch(variety.pokemon.url);
+            const varietyData = await varietyResponse.json();
+
+            varieties.push({
+              id: varietyData.id,
+              name: variety.pokemon.name,
+              sprite: varietyData.sprites.other['official-artwork'].front_default,
+              types: varietyData.types.map((t: any) => t.type.name)
+            });
+          } catch (error) {
+            console.error('Error fetching variety:', error);
+          }
+        }
+      }
+
+      return varieties;
+    } catch (error) {
+      console.error('Error fetching varieties:', error);
+      return [];
+    }
   };
 
   const getTypeColor = (type: string): string => {
-    return typeColors[type] || '#A8A878';
+    const typeColors: { [key: string]: string } = {
+      grass: 'bg-green-500',
+      poison: 'bg-purple-500',
+      fire: 'bg-orange-500',
+      water: 'bg-blue-500',
+      normal: 'bg-gray-400',
+      flying: 'bg-indigo-400',
+      bug: 'bg-lime-500',
+      electric: 'bg-yellow-400',
+      ground: 'bg-amber-600',
+      rock: 'bg-stone-500',
+      ice: 'bg-cyan-400',
+      fighting: 'bg-red-600',
+      psychic: 'bg-pink-500',
+      dragon: 'bg-indigo-600',
+      dark: 'bg-gray-700',
+      steel: 'bg-slate-400',
+      fairy: 'bg-pink-400'
+    };
+    return typeColors[type] || 'bg-gray-400';
   };
 
-  const getCardBackgroundColor = (types: string[]): string => {
-    const typeBackgrounds: { [key: string]: string } = {
+  const getCardColor = (types: string[]): string => {
+    const mainType = types[0];
+    const cardColors: { [key: string]: string } = {
       grass: 'bg-teal-300',
       poison: 'bg-teal-300',
       fire: 'bg-orange-200',
@@ -200,9 +226,9 @@ export default function PokemonDetail() {
       dragon: 'bg-indigo-300',
       dark: 'bg-gray-500',
       steel: 'bg-slate-200',
-      fairy: 'bg-pink-100',
+      fairy: 'bg-pink-100'
     };
-    return typeBackgrounds[types[0]] || 'bg-stone-200';
+    return cardColors[mainType] || 'bg-stone-200';
   };
 
   if (loading) {
@@ -216,7 +242,7 @@ export default function PokemonDetail() {
   if (!pokemon) {
     return (
       <View className="flex-1 bg-red-500 justify-center items-center">
-        <Text className="text-white text-lg font-semibold">Pokémon no encontrado</Text>
+        <Text className="text-white text-lg">Pokémon no encontrado</Text>
       </View>
     );
   }
@@ -226,215 +252,182 @@ export default function PokemonDetail() {
       {/* Header con botón atrás */}
       <View className="flex-row items-center justify-between px-4 pt-4 pb-2">
         <TouchableOpacity onPress={() => router.back()}>
-          <Text className="text-white text-2xl font-bold">← Atrás</Text>
+          <Ionicons name="arrow-back" size={28} color="white" />
         </TouchableOpacity>
-        <Text className="text-white text-lg font-bold">Detalles</Text>
-        <View style={{ width: 60 }} />
+        <Text className="text-white text-xl font-extrabold">Detalles</Text>
+        <View className="w-7" />
       </View>
 
-      {/* Tarjeta principal */}
-      <View className={`mx-4 my-3 rounded-2xl ${getCardBackgroundColor(pokemon.types)} p-4`}>
-        <View className="items-center mb-4">
-          <Text className="text-gray-600 text-2xl font-extrabold">
+      {/* Card principal del Pokémon */}
+      <View className={`mx-4 rounded-xl ${getCardColor(pokemon.types)} p-4 mb-4`}>
+        <View className="items-center">
+          {/* Número y Nombre */}
+          <Text className="text-gray-600 text-3xl font-extrabold">
             #{pokemon.id.toString().padStart(3, '0')}
           </Text>
-          <Text className="text-gray-900 text-3xl font-extrabold capitalize mt-2">
+          <Text className="text-gray-900 text-2xl font-extrabold capitalize mt-1">
             {pokemon.name}
           </Text>
-        </View>
 
-        <View className="flex-row gap-2 justify-center mb-4">
-          {pokemon.types.map((type, idx) => (
-            <View
-              key={idx}
-              className="px-4 py-2 rounded-full"
-              style={{ backgroundColor: getTypeColor(type) }}
+          {/* Imagen del Pokémon */}
+          <TouchableOpacity onPress={() => setShowShiny(!showShiny)} className="mt-2">
+            <View className="bg-white/50 rounded-full p-3">
+              <Image
+                source={{ uri: showShiny ? pokemon.shinySprite : pokemon.sprite }}
+                className="w-32 h-32"
+                resizeMode="contain"
+              />
+            </View>
+            <Text className="text-xs text-gray-700 mt-1 text-center font-semibold">
+              {showShiny ? 'Toca para ver normal' : 'Toca para ver shiny'}
+            </Text>
+          </TouchableOpacity>
+
+          {/* Botón sonido */}
+          {pokemon.cry && (
+            <TouchableOpacity
+              onPress={playCry}
+              className="mt-3 bg-white/80 rounded-full p-3"
             >
-              <Text className="text-white text-sm font-extrabold uppercase">
-                {type}
+              <Ionicons name="volume-high" size={24} color="#ef4444" />
+            </TouchableOpacity>
+          )}
+
+          {/* Tipos */}
+          <View className="flex-row gap-2 mt-3">
+            {pokemon.types.map((type, index) => (
+              <View key={index} className={`${getTypeColor(type)} px-4 py-1.5 rounded-full`}>
+                <Text className="text-white text-xs font-extrabold uppercase">
+                  {type}
+                </Text>
+              </View>
+            ))}
+          </View>
+
+          {/* Información básica */}
+          <View className="flex-row gap-4 mt-4 w-full">
+            <View className="flex-1 items-center">
+              <Text className="text-gray-700 text-sm font-bold">Altura</Text>
+              <Text className="text-gray-900 text-lg font-extrabold">
+                {pokemon.height} m
               </Text>
             </View>
-          ))}
+            <View className="flex-1 items-center">
+              <Text className="text-gray-700 text-sm font-bold">Peso</Text>
+              <Text className="text-gray-900 text-lg font-extrabold">
+                {pokemon.weight} kg
+              </Text>
+            </View>
+          </View>
         </View>
+      </View>
 
-        <View className="items-center mb-4">
-          <TouchableOpacity onPress={() => setShowShiny(!showShiny)}>
-            <Image
-              source={{ uri: showShiny ? pokemon.shinySprite : pokemon.sprite }}
-              className="w-32 h-32"
-              resizeMode="contain"
-            />
-          </TouchableOpacity>
-          <Text className="text-gray-600 text-xs font-bold mt-2">
-            {showShiny ? 'Toca para normal' : 'Toca para shiny'}
+      {/* Descripción */}
+      <View className="mx-4 mb-4">
+        <Text className="text-white text-sm font-semibold mb-2">Descripción</Text>
+        <View className="bg-white rounded-lg p-3">
+          <Text className="text-gray-800 text-sm leading-5">
+            {pokemon.description}
           </Text>
         </View>
-
-        {/* Información básica */}
-        <View className="bg-white/30 rounded-xl p-3 mb-4">
-          <Text className="text-gray-900 font-bold mb-2">Información</Text>
-          <Text className="text-gray-800 text-sm mb-1">
-            <Text className="font-bold">Altura:</Text> {pokemon.height}m
-          </Text>
-          <Text className="text-gray-800 text-sm mb-1">
-            <Text className="font-bold">Peso:</Text> {pokemon.weight}kg
-          </Text>
-        </View>
-
-        {/* Descripción */}
-        <View className="bg-white/30 rounded-xl p-3 mb-4">
-          <Text className="text-gray-900 font-bold mb-2">Descripción</Text>
-          <Text className="text-gray-800 text-sm">{pokemon.description}</Text>
-        </View>
-
-        {/* Sonido */}
-        {pokemon.cry && (
-          <TouchableOpacity 
-            onPress={() => Linking.openURL(pokemon.cry)}
-            className="bg-white/30 rounded-xl p-3 mb-4 items-center"
-          >
-            <Text className="text-gray-900 font-bold">🔊 Reproducir sonido</Text>
-          </TouchableOpacity>
-        )}
       </View>
 
       {/* Estadísticas */}
-      <View className="mx-4 my-3">
-        <Text className="text-white text-lg font-bold mb-3">Estadísticas Base</Text>
-        {pokemon.stats.map((stat, idx) => (
-          <View key={idx} className="mb-3">
-            <View className="flex-row justify-between mb-1">
-              <Text className="text-white text-sm font-bold capitalize">
-                {stat.name}
-              </Text>
-              <Text className="text-white text-sm font-bold">{stat.value}</Text>
-            </View>
-            <View className="bg-white/20 rounded-full h-2 overflow-hidden">
-              <View
-                className="bg-white h-full"
-                style={{ width: `${(stat.value / 150) * 100}%` }}
-              />
-            </View>
-          </View>
-        ))}
+      <View className="mx-4 mb-4 bg-white rounded-lg overflow-hidden">
+        <PokemonStats stats={pokemon.stats} mainType={pokemon.types[0]} />
+      </View>
+
+      {/* Habilidades */}
+      <View className="mx-4 mb-4">
+        <Text className="text-white text-sm font-semibold mb-2">Habilidades</Text>
+        <View className="bg-white rounded-lg p-3">
+          {pokemon.abilities.map((ability, index) => (
+            <Text key={index} className="text-gray-800 text-sm capitalize mb-1">
+              • {ability.replace('-', ' ')}
+            </Text>
+          ))}
+        </View>
       </View>
 
       {/* Cadena Evolutiva */}
-      {pokemon.evolutionChain.length > 1 && (
-        <View className="mx-4 my-3">
-          <Text className="text-white text-lg font-bold mb-3">Cadena Evolutiva</Text>
-          <View className="flex-row flex-wrap items-center justify-around">
-            {pokemon.evolutionChain.map((evo, idx) => (
-              <View key={idx} className="items-center mb-3">
-                <TouchableOpacity 
-                  onPress={() => router.push(`/pokemon/${evo.id}`)}
-                  className="bg-white/20 rounded-xl p-2 mb-2"
-                >
-                  <Image
-                    source={{ uri: evo.sprite }}
-                    className="w-20 h-20"
-                    resizeMode="contain"
-                  />
-                </TouchableOpacity>
-                <Text className="text-white text-xs font-bold">#{evo.id.toString().padStart(3, '0')}</Text>
-                <Text className="text-white text-xs capitalize font-bold text-center">{evo.name}</Text>
-                <View className="flex-row gap-1 mt-1">
-                  {evo.types.map((type, typeIdx) => (
-                    <View
-                      key={typeIdx}
-                      className="px-2 py-1 rounded-full"
-                      style={{ backgroundColor: getTypeColor(type) }}
-                    >
-                      <Text className="text-white text-xs font-bold uppercase">
-                        {type}
-                      </Text>
+      {pokemon.evolutionChain.length > 0 && (
+        <View className="mx-4 mb-4 bg-white rounded-lg p-3">
+          <Text className="text-gray-900 text-sm font-semibold mb-3">Cadena Evolutiva</Text>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+            <View className="flex-row items-center">
+              {pokemon.evolutionChain.map((evolution, index) => (
+                <View key={index} className="flex-row items-center">
+                  <TouchableOpacity
+                    onPress={() => router.push(`/pokemon/${evolution.id}`)}
+                    className={`${getCardColor(evolution.types)} rounded-lg p-2 items-center`}
+                  >
+                    <Text className="text-gray-700 text-xs font-bold">
+                      #{evolution.id.toString().padStart(3, '0')}
+                    </Text>
+                    <Image
+                      source={{ uri: evolution.sprite }}
+                      className="w-20 h-20"
+                      resizeMode="contain"
+                    />
+                    <Text className="text-gray-900 text-xs font-bold capitalize text-center">
+                      {evolution.name}
+                    </Text>
+                    <View className="flex-row gap-1 mt-1">
+                      {evolution.types.map((type, idx) => (
+                        <View key={idx} className={`${getTypeColor(type)} px-2 py-0.5 rounded-full`}>
+                          <Text className="text-white text-xs font-bold uppercase">
+                            {type}
+                          </Text>
+                        </View>
+                      ))}
                     </View>
-                  ))}
+                  </TouchableOpacity>
+                  {index < pokemon.evolutionChain.length - 1 && (
+                    <Text className="mx-2 text-gray-900 text-lg font-bold">→</Text>
+                  )}
                 </View>
-                {idx < pokemon.evolutionChain.length - 1 && (
-                  <Text className="text-white text-lg font-bold mt-2">→</Text>
-                )}
-              </View>
-            ))}
-          </View>
-        </View>
-      )}
-
-      {/* Mega Evoluciones */}
-      {pokemon.megaEvolutions.length > 0 && (
-        <View className="mx-4 my-3">
-          <Text className="text-white text-lg font-bold mb-3">Mega Evolución</Text>
-          <View className="flex-row flex-wrap justify-around">
-            {pokemon.megaEvolutions.map((mega, idx) => (
-              <View key={idx} className="items-center mb-3 bg-white/10 rounded-xl p-3">
-                <Image
-                  source={{ uri: mega.sprite }}
-                  className="w-24 h-24"
-                  resizeMode="contain"
-                />
-                <Text className="text-white text-xs capitalize font-bold mt-2 text-center">
-                  {mega.name}
-                </Text>
-                <View className="flex-row gap-1 mt-2">
-                  {mega.types.map((type, typeIdx) => (
-                    <View
-                      key={typeIdx}
-                      className="px-2 py-1 rounded-full"
-                      style={{ backgroundColor: getTypeColor(type) }}
-                    >
-                      <Text className="text-white text-xs font-bold uppercase">
-                        {type}
-                      </Text>
-                    </View>
-                  ))}
-                </View>
-              </View>
-            ))}
-          </View>
+              ))}
+            </View>
+          </ScrollView>
         </View>
       )}
 
       {/* Formas Alternativas */}
-      {pokemon.varieties.length > 1 && (
-        <View className="mx-4 my-3 pb-8">
-          <Text className="text-white text-lg font-bold mb-3">Formas Alternativas</Text>
-          <View className="flex-row flex-wrap justify-around">
-            {pokemon.varieties.map((variety, idx) => (
-              <TouchableOpacity
-                key={idx}
-                onPress={() => {
-                  const varietyPokemonName = variety.name;
-                  // Fetch the ID of this variety
-                  fetch(`https://pokeapi.co/api/v2/pokemon/${varietyPokemonName}`)
-                    .then(res => res.json())
-                    .then(data => router.push(`/pokemon/${data.id}`));
-                }}
-                className="items-center mb-3 bg-white/10 rounded-xl p-3"
-              >
-                <Image
-                  source={{ uri: variety.sprite }}
-                  className="w-24 h-24"
-                  resizeMode="contain"
-                />
-                <Text className="text-white text-xs capitalize font-bold mt-2 text-center">
-                  {variety.name}
-                </Text>
-                <View className="flex-row gap-1 mt-2">
-                  {variety.types.map((type, typeIdx) => (
-                    <View
-                      key={typeIdx}
-                      className="px-2 py-1 rounded-full"
-                      style={{ backgroundColor: getTypeColor(type) }}
-                    >
-                      <Text className="text-white text-xs font-bold uppercase">
-                        {type}
-                      </Text>
-                    </View>
-                  ))}
-                </View>
-              </TouchableOpacity>
-            ))}
-          </View>
+      {pokemon.varieties.length > 0 && (
+        <View className="mx-4 mb-6 bg-white rounded-lg p-3">
+          <Text className="text-gray-900 text-sm font-semibold mb-3">Formas Alternativas</Text>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+            <View className="flex-row">
+              {pokemon.varieties.map((variety, index) => (
+                <TouchableOpacity
+                  key={index}
+                  onPress={() => router.push(`/pokemon/${variety.id}`)}
+                  className={`${getCardColor(variety.types)} rounded-lg p-2 items-center mr-2`}
+                >
+                  <Text className="text-gray-700 text-xs font-bold capitalize text-center max-w-20">
+                    {variety.name.replace('-', ' ')}
+                  </Text>
+                  <Image
+                    source={{ uri: variety.sprite }}
+                    className="w-20 h-20"
+                    resizeMode="contain"
+                  />
+                  <Text className="text-gray-700 text-xs font-bold">
+                    #{variety.id.toString().padStart(3, '0')}
+                  </Text>
+                  <View className="flex-row gap-1 mt-1">
+                    {variety.types.map((type, idx) => (
+                      <View key={idx} className={`${getTypeColor(type)} px-2 py-0.5 rounded-full`}>
+                        <Text className="text-white text-xs font-bold uppercase">
+                          {type}
+                        </Text>
+                      </View>
+                    ))}
+                  </View>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </ScrollView>
         </View>
       )}
     </ScrollView>
