@@ -3,7 +3,7 @@ import { useRouter } from 'expo-router';
 import { useState, useEffect } from 'react';
 import GenerationModal from '../components/ui/GenerationModal';
 import TypeModal from '../components/ui/TypeModal';
-
+import { Ionicons } from '@expo/vector-icons'; // o cualquier icon
 interface Pokemon {
   id: number;
   name: string;
@@ -290,6 +290,13 @@ export default function Index() {
         onSelect={setSelectedType}
         selectedType={selectedType}
       />
+      {/* Botón flotante para abrir chatbot */}
+      <TouchableOpacity
+        onPress={() => router.push('/chatbot')}
+        className="absolute bottom-6 right-6 bg-white rounded-full p-4 shadow-lg"
+      >
+        <Ionicons name="ellipse-outline" size={32} color="#ef4444" /> {/* Usa icono de pokebola o similar */}
+      </TouchableOpacity>
     </View>
   );
 }
