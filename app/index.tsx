@@ -3,14 +3,18 @@ import { useRouter } from 'expo-router';
 import { useState, useEffect } from 'react';
 import GenerationModal from '../components/ui/GenerationModal';
 import TypeModal from '../components/ui/TypeModal';
-import { Ionicons } from '@expo/vector-icons'; // o cualquier icon
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
+
 interface Pokemon {
   id: number;
   name: string;
   types: string[];
-  sprite: string;
+  sprite: string | null;
   generation: number;
 }
+
+type ViewStyleMode = 'artwork' | 'artwork-shiny' | 'sprite' | 'sprite-shiny' | 'sprite-animated';
 
 export default function Index() {
   const [pokemons, setPokemons] = useState<Pokemon[]>([]);
@@ -21,78 +25,64 @@ export default function Index() {
   const [selectedType, setSelectedType] = useState<string | null>(null);
   const [generationModalVisible, setGenerationModalVisible] = useState(false);
   const [typeModalVisible, setTypeModalVisible] = useState(false);
+
+  // Favoritos / Capturados / Filtros visibles
+  const [favorites, setFavorites] = useState<Set<number>>(new Set());
+  const [captured, setCaptured] = useState<Set<number>>(new Set());
+  const [showOnlyFavorites, setShowOnlyFavorites] = useState(false);
+  const [showOnlyCaptured, setShowOnlyCaptured] = useState(false);
+
+  // Estilo de visualización en la lista (cambia qué sprite cargamos al fetch)
+  const [viewStyle, setViewStyle] = useState<ViewStyleMode>('artwork');
+
+  // FAB “+”
+  const [fabOpen, setFabOpen] = useState(false);
+
   const router = useRouter();
+
+  // Cargar favoritos/capturados
+  useEffect(() => {
+    (async () => {
+      try {
+        const favRaw = await AsyncStorage.getItem('favorites');
+        const capRaw = await AsyncStorage.getItem('captured');
+        if (favRaw) setFavorites(new Set(JSON.parse(favRaw)));
+        if (capRaw) setCaptured(new Set(JSON.parse(capRaw)));
+      } catch {}
+    })();
+  }, []); // Persistencia con AsyncStorage recomendada para estado simple local
+
+  const persistSets = async (key: 'favorites' | 'captured', setObj: Set<number>) => {
+    try {
+      await AsyncStorage.setItem(key, JSON.stringify(Array.from(setObj)));
+    } catch {}
+  }; // Guardar cambios en almacenamiento local para mantener el estado entre sesiones
+
+  const toggleFavorite = (id: number) => {
+    setFavorites(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      persistSets('favorites', next);
+      return next;
+    });
+  }; // Alternar favorito para cada Pokémon con clave por id y persistencia local
+
+  const toggleCaptured = (id: number) => {
+    setCaptured(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      persistSets('captured', next);
+      return next;
+    });
+  }; // Alternar capturado con persistencia para listas de progreso del usuario
 
   useEffect(() => {
     fetchPokemons();
-  }, []);
+  }, []); // Carga inicial del catálogo de Pokémon desde PokéAPI con límite 1025
 
   useEffect(() => {
     filterPokemons();
-  }, [searchQuery, selectedGeneration, selectedType, pokemons]);
-
-  const fetchPokemons = async () => {
-    try {
-      const response = await fetch('https://pokeapi.co/api/v2/pokemon?limit=1025');
-      const data = await response.json();
-      
-      const pokemonDetails = await Promise.all(
-        data.results.map(async (pokemon: any) => {
-          try {
-            const details = await fetch(pokemon.url);
-            const detailsData = await details.json();
-
-            if (detailsData.id >= 1 && detailsData.id <= 1025) {
-              const generation = Math.ceil(detailsData.id / 151);
-
-              return {
-                id: detailsData.id,
-                name: detailsData.name,
-                types: detailsData.types.map((t: any) => t.type.name),
-                sprite: detailsData.sprites.other['official-artwork'].front_default,
-                generation: generation
-              };
-            }
-            return null;
-          } catch (error) {
-            return null;
-          }
-        })
-      );
-
-      const filtered = pokemonDetails.filter((p): p is Pokemon => p !== null);
-      setPokemons(filtered);
-      setFilteredPokemons(filtered);
-      setLoading(false);
-    } catch (error) {
-      console.error('Error fetching pokemons:', error);
-      setLoading(false);
-    }
-  };
-
-  const filterPokemons = () => {
-    let result = pokemons;
-
-    // Filtro por búsqueda
-    if (searchQuery !== '') {
-      result = result.filter(pokemon =>
-        pokemon.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        pokemon.id.toString().includes(searchQuery)
-      );
-    }
-
-    // Filtro por generación
-    if (selectedGeneration !== null) {
-      result = result.filter(pokemon => pokemon.generation === selectedGeneration);
-    }
-
-    // Filtro por tipo
-    if (selectedType !== null) {
-      result = result.filter(pokemon => pokemon.types.includes(selectedType));
-    }
-
-    setFilteredPokemons(result);
-  };
+  }, [searchQuery, selectedGeneration, selectedType, pokemons, showOnlyFavorites, showOnlyCaptured, favorites, captured]); // Recalcular listado visible cuando cambian filtros o estados de favoritos/capturados.[web:41]
 
   const getTypeColor = (type: string): string => {
     const typeColors: { [key: string]: string } = {
@@ -115,7 +105,7 @@ export default function Index() {
       fairy: 'bg-pink-400'
     };
     return typeColors[type] || 'bg-gray-400';
-  };
+  }; // Colores de etiquetas por tipo para consistencia visual en las cards
 
   const getCardColor = (types: string[]): string => {
     const mainType = types[0];
@@ -139,28 +129,144 @@ export default function Index() {
       fairy: 'bg-pink-100'
     };
     return cardColors[mainType] || 'bg-stone-200';
-  };
+  }; // Fondo de tarjeta basado en el primer tipo para diferenciar visualmente
+
+  // Selección de imagen por modo para la LISTA (no para detalle)
+  const pickImageByMode = (detailsData: any): string | null => {
+    switch (viewStyle) {
+      case 'artwork':
+        return detailsData.sprites?.other?.['official-artwork']?.front_default
+          || detailsData.sprites?.front_default
+          || null; // Fallback a sprite estático si no hay artwork
+      case 'artwork-shiny':
+        return detailsData.sprites?.other?.['official-artwork']?.front_shiny
+          || detailsData.sprites?.front_shiny
+          || detailsData.sprites?.other?.['official-artwork']?.front_default
+          || detailsData.sprites?.front_default
+          || null; // Fallback hacia variantes disponibles si falta shiny
+      case 'sprite':
+        return detailsData.sprites?.front_default
+          || detailsData.sprites?.other?.['official-artwork']?.front_default
+          || null; // Sprite base o artwork como respaldo
+      case 'sprite-shiny':
+        return detailsData.sprites?.front_shiny
+          || detailsData.sprites?.front_default
+          || detailsData.sprites?.other?.['official-artwork']?.front_shiny
+          || detailsData.sprites?.other?.['official-artwork']?.front_default
+          || null; // Alternativas si no existe shiny
+      case 'sprite-animated':
+        return detailsData.sprites?.versions?.['generation-v']?.['black-white']?.animated?.front_default
+          || detailsData.sprites?.front_default
+          || detailsData.sprites?.other?.['official-artwork']?.front_default
+          || null; // Animado Gen V o fallback a sprite/artwork
+      default:
+        return detailsData.sprites?.other?.['official-artwork']?.front_default || null; // Predeterminado a artwork
+    }
+  }; // Esta elección reduce saltos visuales y aprovecha campos comunes de PokéAPI
+
+  const fetchPokemons = async () => {
+    try {
+      const response = await fetch('https://pokeapi.co/api/v2/pokemon?limit=1025');
+      const data = await response.json();
+
+      const pokemonDetails = await Promise.all(
+        data.results.map(async (pokemon: any) => {
+          try {
+            const details = await fetch(pokemon.url);
+            const detailsData = await details.json();
+
+            if (detailsData.id >= 1 && detailsData.id <= 1025) {
+              const generation = Math.ceil(detailsData.id / 151);
+              const spriteUrl = pickImageByMode(detailsData);
+              return {
+                id: detailsData.id,
+                name: detailsData.name,
+                types: detailsData.types.map((t: any) => t.type.name),
+                sprite: spriteUrl,
+                generation: generation
+              };
+            }
+            return null;
+          } catch {
+            return null;
+          }
+        })
+      );
+
+      const filtered = pokemonDetails.filter((p): p is Pokemon => p !== null);
+      setPokemons(filtered);
+      setFilteredPokemons(filtered);
+      setLoading(false);
+    } catch (error) {
+      console.error('Error fetching pokemons:', error);
+      setLoading(false);
+    }
+  }; // Descarga el listado y decide la imagen en base a viewStyle en el momento del fetch
+
+  const filterPokemons = () => {
+    let result = pokemons;
+
+    if (searchQuery !== '') {
+      result = result.filter(pokemon =>
+        pokemon.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        pokemon.id.toString().includes(searchQuery)
+      );
+    } // Búsqueda por nombre o id para acceso rápido.
+
+    if (selectedGeneration !== null) {
+      result = result.filter(pokemon => pokemon.generation === selectedGeneration);
+    } // Filtrado por generación basado en regla simple del id para experiencia fluida.
+
+    if (selectedType !== null) {
+      result = result.filter(pokemon => pokemon.types.includes(selectedType));
+    } // Filtrado por tipo reutilizando la lista ya normalizada
+
+    if (showOnlyFavorites) {
+      result = result.filter(p => favorites.has(p.id));
+    } // Mostrar sólo favoritos cuando el chip está activo
+
+    if (showOnlyCaptured) {
+      result = result.filter(p => captured.has(p.id));
+    } // Mostrar sólo capturados cuando el chip está activo
+
+    setFilteredPokemons(result);
+  }; // Mantiene el estado derivado actualizado en la lista visible con todos los filtros
 
   const renderPokemonCard = ({ item }: { item: Pokemon }) => (
     <TouchableOpacity onPress={() => router.push(`/pokemon/${item.id}`)}>
       <View className={`mx-3 my-1.5 rounded-xl ${getCardColor(item.types)} shadow-sm`}>
         <View className="flex-row items-center px-3 py-2">
-          <View>
+          <View className="flex-1">
             <Text className="text-gray-600 text-2xl font-extrabold" style={{ letterSpacing: 0.5 }}>
               #{item.id.toString().padStart(3, '0')}
             </Text>
             <Text className="text-gray-900 text-xl font-extrabold capitalize mt-0.5" style={{ letterSpacing: 0.3 }}>
               {item.name}
             </Text>
+
+            {/* Toggles favorito / capturado */}
+            <View className="flex-row items-center gap-2 mt-2">
+              <TouchableOpacity onPress={() => toggleFavorite(item.id)} className="mr-1">
+                <Ionicons
+                  name={favorites.has(item.id) ? 'heart' : 'heart-outline'}
+                  size={20}
+                  color={favorites.has(item.id) ? '#ef4444' : '#6b7280'}
+                />
+              </TouchableOpacity>
+              <TouchableOpacity onPress={() => toggleCaptured(item.id)}>
+                <MaterialCommunityIcons
+                  name="pokeball"
+                  size={20}
+                  color={captured.has(item.id) ? '#16a34a' : '#6b7280'}
+                />
+              </TouchableOpacity>
+            </View>
           </View>
 
-          <View className="flex-1 flex-row items-center justify-end gap-2">
+          <View className="flex-row items-center justify-end gap-2">
             <View className="gap-1.5">
               {item.types.map((type, index) => (
-                <View
-                  key={index}
-                  className={`${getTypeColor(type)} px-4 py-1.5 rounded-full`}
-                >
+                <View key={index} className={`${getTypeColor(type)} px-4 py-1.5 rounded-full`}>
                   <Text className="text-white text-sm font-extrabold uppercase">
                     {type}
                   </Text>
@@ -168,18 +274,24 @@ export default function Index() {
               ))}
             </View>
 
-            <View className="bg-white/50 rounded-full p-1.5">
-              <Image
-                source={{ uri: item.sprite }}
-                className="w-24 h-24"
-                resizeMode="contain"
-              />
+            <View className="bg-white/50 rounded-full p-1.5 ml-2">
+              {item.sprite ? (
+                <Image
+                  source={{ uri: item.sprite }}
+                  className="w-24 h-24"
+                  resizeMode="contain"
+                />
+              ) : (
+                <View className="w-24 h-24 items-center justify-center">
+                  <Text className="text-gray-600 text-xs">Sin imagen</Text>
+                </View>
+              )}
             </View>
           </View>
         </View>
       </View>
     </TouchableOpacity>
-  );
+  ); // Tarjeta con nombre, tipos, imagen y controles de favorito/capturado en una fila limpia.[web:22]
 
   if (loading) {
     return (
@@ -190,10 +302,11 @@ export default function Index() {
         </Text>
       </View>
     );
-  }
+  } // Estado de carga con indicador para experiencia fluida al entrar a la app.[web:41]
 
   return (
     <View className="flex-1 bg-red-500">
+      {/* Header */}
       <View className="pt-10 pb-3 items-center">
         <Image
           source={require('../assets/images/icon.png')}
@@ -202,6 +315,7 @@ export default function Index() {
         />
       </View>
 
+      {/* Buscador */}
       <View className="px-4 pb-3">
         <TextInput
           className="bg-white rounded-full px-5 py-2 text-base text-gray-800 font-medium"
@@ -216,28 +330,20 @@ export default function Index() {
       <View className="flex-row px-4 pb-3 gap-3">
         <TouchableOpacity
           onPress={() => setGenerationModalVisible(true)}
-          className={`flex-1 py-2 rounded-full ${
-            selectedGeneration ? 'bg-white' : 'bg-red-600'
-          }`}
+          className={`flex-1 py-2 rounded-full ${selectedGeneration ? 'bg-white' : 'bg-red-600'}`}
         >
           <Text
-            className={`text-center font-bold text-sm ${
-              selectedGeneration ? 'text-red-500' : 'text-white'
-            }`}
+            className={`text-center font-bold text-sm ${selectedGeneration ? 'text-red-500' : 'text-white'}`}
           >
             {selectedGeneration ? `Gen ${selectedGeneration}` : 'GENERACIONES'}
           </Text>
         </TouchableOpacity>
         <TouchableOpacity
           onPress={() => setTypeModalVisible(true)}
-          className={`flex-1 py-2 rounded-full ${
-            selectedType ? 'bg-white' : 'bg-red-600'
-          }`}
+          className={`flex-1 py-2 rounded-full ${selectedType ? 'bg-white' : 'bg-red-600'}`}
         >
           <Text
-            className={`text-center font-bold text-sm ${
-              selectedType ? 'text-red-500' : 'text-white'
-            }`}
+            className={`text-center font-bold text-sm ${selectedType ? 'text-red-500' : 'text-white'}`}
           >
             {selectedType ? selectedType.toUpperCase() : 'TIPOS'}
           </Text>
@@ -245,7 +351,7 @@ export default function Index() {
       </View>
 
       {/* Mostrar filtros activos */}
-      {(selectedGeneration || selectedType || searchQuery) && (
+      {(selectedGeneration || selectedType || searchQuery || showOnlyFavorites || showOnlyCaptured) && (
         <View className="px-4 pb-2 flex-row flex-wrap gap-2">
           {selectedGeneration && (
             <TouchableOpacity
@@ -265,14 +371,35 @@ export default function Index() {
               <Text className="text-white text-lg">×</Text>
             </TouchableOpacity>
           )}
+          {showOnlyFavorites && (
+            <TouchableOpacity
+              onPress={() => setShowOnlyFavorites(false)}
+              className="bg-white/20 rounded-full px-3 py-1 flex-row items-center gap-1"
+            >
+              <Ionicons name="heart" size={14} color="#fff" />
+              <Text className="text-white text-xs font-bold">Favoritos</Text>
+              <Text className="text-white text-lg">×</Text>
+            </TouchableOpacity>
+          )}
+          {showOnlyCaptured && (
+            <TouchableOpacity
+              onPress={() => setShowOnlyCaptured(false)}
+              className="bg-white/20 rounded-full px-3 py-1 flex-row items-center gap-1"
+            >
+              <MaterialCommunityIcons name="pokeball" size={14} color="#fff" />
+              <Text className="text-white text-xs font-bold">Capturados</Text>
+              <Text className="text-white text-lg">×</Text>
+            </TouchableOpacity>
+          )}
         </View>
       )}
 
+      {/* Lista */}
       <FlatList
         data={filteredPokemons}
         renderItem={renderPokemonCard}
         keyExtractor={(item) => item.id.toString()}
-        contentContainerStyle={{ paddingHorizontal: 4, paddingBottom: 20 }}
+        contentContainerStyle={{ paddingHorizontal: 4, paddingBottom: 120 }}
         showsVerticalScrollIndicator={false}
       />
 
@@ -283,20 +410,51 @@ export default function Index() {
         onSelect={setSelectedGeneration}
         selectedGeneration={selectedGeneration}
       />
-
       <TypeModal
         visible={typeModalVisible}
         onClose={() => setTypeModalVisible(false)}
         onSelect={setSelectedType}
         selectedType={selectedType}
       />
-      {/* Botón flotante para abrir chatbot */}
-      <TouchableOpacity
-        onPress={() => router.push('/chatbot')}
-        className="absolute bottom-6 right-6 bg-white rounded-full p-4 shadow-lg"
-      >
-        <Ionicons name="ellipse-outline" size={32} color="#ef4444" /> {/* Usa icono de pokebola o similar */}
-      </TouchableOpacity>
+
+      {/* FAB: “+” → IA / Favoritos / Capturados */}
+      <View className="absolute bottom-6 right-6 items-end">
+        {fabOpen && (
+          <View className="mb-3 items-end">
+            {/* Capturados */}
+            <TouchableOpacity
+              onPress={() => { setShowOnlyCaptured(v => !v); if (showOnlyFavorites) setShowOnlyFavorites(false); }}
+              className={`rounded-full px-4 py-2 mb-2 flex-row items-center shadow ${showOnlyCaptured ? 'bg-green-500' : 'bg-white'}`}
+            >
+              <MaterialCommunityIcons name="pokeball" size={16} color={showOnlyCaptured ? '#fff' : '#111827'} />
+              <Text className={`ml-2 font-bold ${showOnlyCaptured ? 'text-white' : 'text-gray-900'}`}>Capturados</Text>
+            </TouchableOpacity>
+
+            {/* Favoritos */}
+            <TouchableOpacity
+              onPress={() => { setShowOnlyFavorites(v => !v); if (showOnlyCaptured) setShowOnlyCaptured(false); }}
+              className={`rounded-full px-4 py-2 mb-2 flex-row items-center shadow ${showOnlyFavorites ? 'bg-red-500' : 'bg-white'}`}
+            >
+              <Ionicons name="heart" size={16} color={showOnlyFavorites ? '#fff' : '#111827'} />
+              <Text className={`ml-2 font-bold ${showOnlyFavorites ? 'text-white' : 'text-gray-900'}`}>Favoritos</Text>
+            </TouchableOpacity>
+
+            {/* IA */}
+            <TouchableOpacity
+              onPress={() => router.push('/chatbot')}
+              className="bg-white rounded-full px-4 py-2 mb-2 flex-row items-center shadow"
+            >
+              <Ionicons name="sparkles-outline" size={16} color="#111827" />
+              <Text className="ml-2 text-gray-900 font-bold">IA</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
+        {/* Botón principal “+” */}
+        <TouchableOpacity onPress={() => setFabOpen(!fabOpen)} className="bg-white rounded-full p-4 shadow-lg">
+          <Ionicons name={fabOpen ? 'close' : 'add'} size={28} color="#ef4444" />
+        </TouchableOpacity>
+      </View>
     </View>
   );
 }

@@ -1,17 +1,14 @@
 import { View, Text, ScrollView, Image, TouchableOpacity, ActivityIndicator } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { Ionicons } from '@expo/vector-icons';
 import { Audio } from 'expo-av';
 import PokemonStats from '../../components/ui/PokemonStats';
-
 
 interface Pokemon {
   id: number;
   name: string;
   types: string[];
-  sprite: string;
-  shinySprite: string;
   height: number;
   weight: number;
   description: string;
@@ -19,9 +16,15 @@ interface Pokemon {
   cry: string;
   evolutionChain: EvolutionChain[];
   varieties: Variety[];
-  speciesId: number; // ID de la especie base
+  // NUEVO: fuentes de imagen centralizadas
+  artworkDefault: string | null;
+  artworkShiny: string | null;
+  spriteDefault: string | null;
+  spriteShiny: string | null;
+  animatedDefault: string | null;
+  animatedShiny: string | null;
+  speciesId: number; // ya lo usabas antes para mostrar # de especie
 }
-
 
 interface EvolutionChain {
   id: number;
@@ -31,29 +34,33 @@ interface EvolutionChain {
   method: string;
 }
 
-
 interface Variety {
   name: string;
   sprite: string;
   types: string[];
   id: number;
-  speciesId: number; // ID de la especie base para mostrar
+  speciesId: number;
 }
 
+type ViewMode = 'artwork' | 'sprite' | 'animated';
 
 export default function PokemonDetail() {
   const { id } = useLocalSearchParams();
   const router = useRouter();
   const [pokemon, setPokemon] = useState<Pokemon | null>(null);
   const [loading, setLoading] = useState(true);
-  const [showShiny, setShowShiny] = useState(false);
-  const [playingSound, setPlayingSound] = useState(false);
 
+  // NUEVO: control de estilo y shiny
+  const [viewMode, setViewMode] = useState<ViewMode>('artwork');
+  const [isShiny, setIsShiny] = useState(false);
+  const [playingSound, setPlayingSound] = useState(false);
 
   useEffect(() => {
     fetchPokemonDetails();
+    // Al cambiar de id, reiniciar modo a artwork normal
+    setViewMode('artwork');
+    setIsShiny(false);
   }, [id]);
-
 
   const fetchPokemonDetails = async () => {
     try {
@@ -61,40 +68,53 @@ export default function PokemonDetail() {
       const detailsResponse = await fetch(`https://pokeapi.co/api/v2/pokemon/${id}`);
       const detailsData = await detailsResponse.json();
 
-
       const speciesResponse = await fetch(detailsData.species.url);
       const speciesData = await speciesResponse.json();
 
-
       const description = speciesData.flavor_text_entries
         .find((entry: any) => entry.language.name === 'es')?.flavor_text
-        .replace(/\f/g, ' ') || speciesData.flavor_text_entries[0]?.flavor_text || 'Sin descripción disponible';
+        ?.replace(/\f/g, ' ')
+        || speciesData.flavor_text_entries[0]?.flavor_text
+        || 'Sin descripción disponible';
 
-
-      const evolutionChain = await parseEvolutionChain(speciesData.evolution_chain.url, speciesData.id);
+      const evolutionChain = await parseEvolutionChain(speciesData.evolution_chain.url);
       const varieties = await fetchVarieties(speciesData.id, detailsData.id);
-
 
       const stats = detailsData.stats.map((stat: any) => ({
         name: stat.stat.name,
         baseStat: stat.base_stat
       }));
 
+      // Extraer URLs de imágenes relevantes
+      const artworkDefault = detailsData.sprites?.other?.['official-artwork']?.front_default || null;
+      const artworkShiny = detailsData.sprites?.other?.['official-artwork']?.front_shiny || null;
+
+      const spriteDefault = detailsData.sprites?.front_default || null;
+      const spriteShiny = detailsData.sprites?.front_shiny || null;
+
+      const animatedRoot = detailsData.sprites?.versions?.['generation-v']?.['black-white']?.animated;
+      const animatedDefault = animatedRoot?.front_default || null;
+      // Algunas especies tienen shiny animado, otras no:
+      const animatedShiny = animatedRoot?.front_shiny || null; // si no existe, será null
 
       setPokemon({
         id: detailsData.id,
         name: detailsData.name,
         types: detailsData.types.map((t: any) => t.type.name),
-        sprite: detailsData.sprites.other['official-artwork'].front_default,
-        shinySprite: detailsData.sprites.other['official-artwork'].front_shiny,
         height: detailsData.height / 10,
         weight: detailsData.weight / 10,
         description: description,
         stats: stats,
         cry: detailsData.cries?.latest || detailsData.cries?.legacy || '',
-        evolutionChain: evolutionChain,
-        varieties: varieties,
-        speciesId: speciesData.id // Guardar el ID de la especie
+        evolutionChain,
+        varieties,
+        artworkDefault,
+        artworkShiny,
+        spriteDefault,
+        spriteShiny,
+        animatedDefault,
+        animatedShiny,
+        speciesId: speciesData.id
       });
       setLoading(false);
     } catch (error) {
@@ -103,21 +123,17 @@ export default function PokemonDetail() {
     }
   };
 
-
-  const parseEvolutionChain = async (chainUrl: string, speciesId: number): Promise<EvolutionChain[]> => {
+  const parseEvolutionChain = async (chainUrl: string): Promise<EvolutionChain[]> => {
     try {
       const response = await fetch(chainUrl);
       const data = await response.json();
       const evolutions: EvolutionChain[] = [];
-
 
       const processChain = async (node: any) => {
         try {
           const pokemonResponse = await fetch(`https://pokeapi.co/api/v2/pokemon/${node.species.name}`);
           const pokemonData = await pokemonResponse.json();
 
-
-          // Solo agregar si es la forma base (id <= 1025)
           if (pokemonData.id <= 1025) {
             evolutions.push({
               id: pokemonData.id,
@@ -128,7 +144,6 @@ export default function PokemonDetail() {
             });
           }
 
-
           for (const evolve of node.evolves_to) {
             await processChain(evolve);
           }
@@ -136,7 +151,6 @@ export default function PokemonDetail() {
           console.error('Error processing evolution:', error);
         }
       };
-
 
       await processChain(data.chain);
       return evolutions;
@@ -146,37 +160,31 @@ export default function PokemonDetail() {
     }
   };
 
-
   const fetchVarieties = async (speciesId: number, pokemonId: number): Promise<Variety[]> => {
     try {
       const response = await fetch(`https://pokeapi.co/api/v2/pokemon-species/${speciesId}`);
       const data = await response.json();
 
-
       const varieties: Variety[] = [];
-
 
       for (const variety of data.varieties || []) {
         try {
           const varietyResponse = await fetch(variety.pokemon.url);
           const varietyData = await varietyResponse.json();
 
-
-          // Incluir todas las formas alternativas (incluso con IDs altos)
           if (varietyData.id !== pokemonId) {
             varieties.push({
               name: variety.pokemon.name,
               sprite: varietyData.sprites.other['official-artwork'].front_default,
               types: varietyData.types.map((t: any) => t.type.name),
-              id: varietyData.id, // ID real del Pokémon para navegación
-              speciesId: speciesId // ID de la especie base para mostrar
+              id: varietyData.id,
+              speciesId: speciesId
             });
           }
         } catch (error) {
           console.error('Error fetching variety:', error);
         }
       }
-
 
       return varieties;
     } catch (error) {
@@ -185,18 +193,15 @@ export default function PokemonDetail() {
     }
   };
 
-
   const playPokemonCry = async () => {
     if (!pokemon?.cry) {
       alert('Sonido no disponible para este Pokémon');
       return;
     }
-  
     try {
       setPlayingSound(true);
       const { sound } = await Audio.Sound.createAsync({ uri: pokemon.cry });
       await sound.playAsync();
-      
       sound.setOnPlaybackStatusUpdate((status) => {
         if ('isLoaded' in status && status.isLoaded && 'didJustFinish' in status && status.didJustFinish) {
           setPlayingSound(false);
@@ -206,8 +211,7 @@ export default function PokemonDetail() {
       console.error('Error playing sound:', error);
       setPlayingSound(false);
     }
-  };  
-
+  };
 
   const getTypeColor = (type: string): string => {
     const typeColors: { [key: string]: string } = {
@@ -231,7 +235,6 @@ export default function PokemonDetail() {
     };
     return typeColors[type] || 'bg-gray-400';
   };
-
 
   const getCardColor = (types: string[]): string => {
     const mainType = types[0];
@@ -257,39 +260,66 @@ export default function PokemonDetail() {
     return cardColors[mainType] || 'bg-stone-200';
   };
 
+  // Decide la URL de imagen actual según viewMode e isShiny, con fallbacks
+  const currentImage = useMemo(() => {
+    if (!pokemon) return null;
+
+    const {
+      artworkDefault, artworkShiny,
+      spriteDefault, spriteShiny,
+      animatedDefault, animatedShiny
+    } = pokemon;
+
+    if (viewMode === 'artwork') {
+      return isShiny
+        ? (artworkShiny || artworkDefault || spriteShiny || spriteDefault)
+        : (artworkDefault || spriteDefault || artworkShiny || spriteShiny);
+    }
+
+    if (viewMode === 'sprite') {
+      return isShiny
+        ? (spriteShiny || spriteDefault || artworkShiny || artworkDefault)
+        : (spriteDefault || artworkDefault || spriteShiny || artworkShiny);
+    }
+
+    // animated
+    if (isShiny) {
+      // shiny animado puede no existir; fallback a sprite shiny o animado normal
+      return animatedShiny || spriteShiny || animatedDefault || spriteDefault || artworkShiny || artworkDefault;
+    } else {
+      return animatedDefault || spriteDefault || artworkDefault || spriteShiny || artworkShiny;
+    }
+  }, [pokemon, viewMode, isShiny]); // [web:44][web:63][web:129]
+
+  const cyclePrevMode = () => {
+    const order: ViewMode[] = ['artwork', 'sprite', 'animated'];
+    const idx = order.indexOf(viewMode);
+    const prev = idx === 0 ? order[order.length - 1] : order[idx - 1];
+    setViewMode(prev);
+  };
+
+  const cycleNextMode = () => {
+    const order: ViewMode[] = ['artwork', 'sprite', 'animated'];
+    const idx = order.indexOf(viewMode);
+    const next = idx === order.length - 1 ? order[0] : order[idx + 1];
+    setViewMode(next);
+  };
 
   if (loading) {
     return (
       <View className="flex-1 bg-red-500 justify-center items-center">
         <ActivityIndicator size="large" color="#ffffff" />
-        <Text className="text-white mt-4 text-lg font-semibold">
-          Cargando detalles...
-        </Text>
       </View>
     );
   }
-
 
   if (!pokemon) {
     return (
-      <View className="flex-1 bg-red-500 justify-center items-center px-6">
-        <Ionicons name="alert-circle-outline" size={64} color="white" />
-        <Text className="text-white text-xl font-bold mt-4 text-center">
-          Pokémon no encontrado
-        </Text>
-        <Text className="text-white/80 text-sm mt-2 text-center">
-          No se pudo cargar la información. Verifica tu conexión a internet.
-        </Text>
-        <TouchableOpacity 
-          onPress={() => router.back()}
-          className="mt-6 bg-white px-6 py-3 rounded-full"
-        >
-          <Text className="text-red-500 font-bold">Volver</Text>
-        </TouchableOpacity>
+      <View className="flex-1 bg-red-500 justify-center items-center">
+        <Text className="text-white text-lg">Pokémon no encontrado</Text>
       </View>
     );
   }
-
 
   return (
     <ScrollView className="flex-1 bg-red-500">
@@ -302,11 +332,10 @@ export default function PokemonDetail() {
         <View className="w-7" />
       </View>
 
-
       {/* Card principal del Pokémon */}
       <View className={`mx-4 rounded-xl ${getCardColor(pokemon.types)} p-4 mb-4`}>
         <View className="items-center">
-          {/* Número y Nombre - CORREGIDO: Usar speciesId */}
+          {/* Número y Nombre */}
           <Text className="text-gray-600 text-3xl font-extrabold">
             #{pokemon.speciesId.toString().padStart(3, '0')}
           </Text>
@@ -314,21 +343,38 @@ export default function PokemonDetail() {
             {pokemon.name}
           </Text>
 
+          {/* Controles de estilo + imagen */}
+          <View className="flex-row items-center mt-2">
+            {/* Flecha izquierda */}
+            <TouchableOpacity onPress={cyclePrevMode} className="p-2">
+              <Ionicons name="chevron-back-circle" size={30} color="#374151" />
+            </TouchableOpacity>
 
-          {/* Imagen del Pokémon */}
-          <TouchableOpacity onPress={() => setShowShiny(!showShiny)} className="mt-2">
-            <View className="bg-white/50 rounded-full p-3">
-              <Image
-                source={{ uri: showShiny ? pokemon.shinySprite : pokemon.sprite }}
-                className="w-32 h-32"
-                resizeMode="contain"
-              />
-            </View>
-            <Text className="text-xs text-gray-700 mt-1 text-center font-semibold">
-              {showShiny ? 'Toca para ver normal' : 'Toca para ver shiny'}
-            </Text>
-          </TouchableOpacity>
+            {/* Imagen con toggle shiny */}
+            <TouchableOpacity onPress={() => setIsShiny(s => !s)} className="mx-2">
+              <View className="bg-white/50 rounded-full p-3">
+                {currentImage ? (
+                  <Image
+                    source={{ uri: currentImage }}
+                    className="w-32 h-32"
+                    resizeMode="contain"
+                  />
+                ) : (
+                  <View className="w-32 h-32 items-center justify-center">
+                    <Text className="text-gray-600 text-xs">Sin imagen</Text>
+                  </View>
+                )}
+              </View>
+              <Text className="text-xs text-gray-700 mt-1 text-center font-semibold">
+                {isShiny ? 'Shiny (toca para normal)' : 'Normal (toca para shiny)'}
+              </Text>
+            </TouchableOpacity>
 
+            {/* Flecha derecha */}
+            <TouchableOpacity onPress={cycleNextMode} className="p-2">
+              <Ionicons name="chevron-forward-circle" size={30} color="#374151" />
+            </TouchableOpacity>
+          </View>
 
           {/* Tipos */}
           <View className="flex-row gap-2 mt-3">
@@ -340,7 +386,6 @@ export default function PokemonDetail() {
               </View>
             ))}
           </View>
-
 
           {/* Información básica */}
           <View className="flex-row gap-4 mt-4 w-full">
@@ -358,7 +403,6 @@ export default function PokemonDetail() {
             </View>
           </View>
 
-
           {/* Botón para reproducir sonido */}
           {pokemon.cry && (
             <TouchableOpacity
@@ -375,7 +419,6 @@ export default function PokemonDetail() {
         </View>
       </View>
 
-
       {/* Descripción */}
       <View className="mx-4 mb-4">
         <Text className="text-white text-lg font-extrabold mb-2">Descripción</Text>
@@ -386,10 +429,8 @@ export default function PokemonDetail() {
         </View>
       </View>
 
-
       {/* Estadísticas */}
       <PokemonStats stats={pokemon.stats} mainType={pokemon.types[0]} />
-
 
       {/* Cadena Evolutiva */}
       {pokemon.evolutionChain.length > 1 && (
@@ -436,8 +477,7 @@ export default function PokemonDetail() {
         </View>
       )}
 
-
-      {/* Formas Alternativas (incluye Mega y otras) - CORREGIDO */}
+      {/* Formas Alternativas */}
       {pokemon.varieties.length > 0 && (
         <View className="mx-4 mb-6">
           <Text className="text-white text-lg font-extrabold mb-3">Formas Alternativas</Text>
@@ -450,12 +490,11 @@ export default function PokemonDetail() {
                     onPress={() => router.push(`/pokemon/${variety.id}`)}
                     className={`${getCardColor(variety.types)} rounded-lg p-2 items-center w-24`}
                   >
-                    {/* CORREGIDO: Mostrar speciesId en lugar de variety.id */}
                     <Text className="text-gray-700 text-xs font-bold">
                       #{variety.speciesId.toString().padStart(3, '0')}
                     </Text>
                     <Text className="text-gray-600 text-xs font-semibold capitalize text-center mb-1">
-                      {variety.name.replace(/-/g, ' ').replace(/^.*\s/, '')}
+                      {variety.name.replace(/-/g, ' ').replace(/^.*\\s/, '')}
                     </Text>
                     <Image
                       source={{ uri: variety.sprite }}

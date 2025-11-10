@@ -1,15 +1,5 @@
 import React, { useState } from "react";
-import {
-  View,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  ScrollView,
-  ActivityIndicator,
-  KeyboardAvoidingView,
-  Platform,
-  Image,
-} from "react-native";
+import {View, Text, TextInput, TouchableOpacity, ScrollView, ActivityIndicator, KeyboardAvoidingView, Platform, Image,} from "react-native";
 
 const exampleSuggestions = [
   "¿Cuáles son las evoluciones de Pikachu?",
@@ -36,7 +26,7 @@ export default function Chatbot() {
     setResponseImage(null);
 
     try {
-      // Detectar si el usuario quiere generar imagen (puedes mejorar esta lógica)
+      // Detectar si el usuario quiere generar imagen
       const wantsImage = prompt.toLowerCase().includes("generar imagen") || prompt.toLowerCase().includes("dibuja") || prompt.toLowerCase().includes("imagen");
 
       if (wantsImage) {
