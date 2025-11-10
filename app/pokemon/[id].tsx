@@ -16,14 +16,13 @@ interface Pokemon {
   cry: string;
   evolutionChain: EvolutionChain[];
   varieties: Variety[];
-  // NUEVO: fuentes de imagen centralizadas
   artworkDefault: string | null;
   artworkShiny: string | null;
   spriteDefault: string | null;
   spriteShiny: string | null;
   animatedDefault: string | null;
   animatedShiny: string | null;
-  speciesId: number; // ya lo usabas antes para mostrar # de especie
+  speciesId: number;
 }
 
 interface EvolutionChain {
@@ -50,32 +49,79 @@ export default function PokemonDetail() {
   const [pokemon, setPokemon] = useState<Pokemon | null>(null);
   const [loading, setLoading] = useState(true);
 
-  // NUEVO: control de estilo y shiny
+  // Estilo de visualización y shiny
   const [viewMode, setViewMode] = useState<ViewMode>('artwork');
   const [isShiny, setIsShiny] = useState(false);
   const [playingSound, setPlayingSound] = useState(false);
 
+  // Traducción con Gemini (idioma objetivo configurable)
+  const [targetLang, setTargetLang] = useState<'es'|'en'|'fr'|'pt'>('es'); // por defecto español [web:22]
+  const [translatedDescription, setTranslatedDescription] = useState<string | null>(null);
+  const GEMINI_KEY = process.env.EXPO_PUBLIC_GEMINI_API_KEY || '';
+  const GEMINI_MODEL = 'gemini-2.0-flash';
+  const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_KEY}`; // [web:138]
+
   useEffect(() => {
     fetchPokemonDetails();
-    // Al cambiar de id, reiniciar modo a artwork normal
     setViewMode('artwork');
     setIsShiny(false);
   }, [id]);
 
+  const cleanFlavor = (txt: string) => {
+    return txt.replace(/\f/g, ' ').replace(/\u000c/g, ' ').replace(/\n/g, ' ').replace(/\s+/g, ' ').trim();
+  }; // Limpia caracteres de control y normaliza espacios para mejor legibilidad [web:135]
+
+  const translateWithGemini = async (text: string, to: string) => {
+    if (!GEMINI_KEY) return null;
+    try {
+      const prompt = `Traduce al idioma objetivo manteniendo tono enciclopédico y neutro.\nIdioma objetivo: ${to}\nTexto:\n${text}`;
+      const res = await fetch(GEMINI_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ role: 'user', parts: [{ text: prompt }] }]
+        })
+      });
+      const data = await res.json();
+      const blocked = data?.promptFeedback?.blockReason;
+      if (blocked) return null;
+      const out = data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+      return out || null;
+    } catch {
+      return null;
+    }
+  }; // Traducción vía API de Gemini para cubrir especies sin flavor en el idioma objetivo [web:138]
+
   const fetchPokemonDetails = async () => {
     try {
       setLoading(true);
+      setTranslatedDescription(null);
+
       const detailsResponse = await fetch(`https://pokeapi.co/api/v2/pokemon/${id}`);
-      const detailsData = await detailsResponse.json();
+      const detailsData = await detailsResponse.json(); // [web:38]
 
       const speciesResponse = await fetch(detailsData.species.url);
-      const speciesData = await speciesResponse.json();
+      const speciesData = await speciesResponse.json(); // [web:22]
 
-      const description = speciesData.flavor_text_entries
-        .find((entry: any) => entry.language.name === 'es')?.flavor_text
-        ?.replace(/\f/g, ' ')
-        || speciesData.flavor_text_entries[0]?.flavor_text
-        || 'Sin descripción disponible';
+      // Selección de flavor según idioma objetivo con fallback
+      const flavorEntries = speciesData.flavor_text_entries || [];
+      const entryTarget = flavorEntries.find((e: any) => e.language?.name === targetLang);
+      const entryEn = flavorEntries.find((e: any) => e.language?.name === 'en');
+      const entryAny = flavorEntries[0];
+
+      let rawDesc = entryTarget?.flavor_text || entryEn?.flavor_text || entryAny?.flavor_text || 'Sin descripción disponible';
+      rawDesc = cleanFlavor(rawDesc); // [web:135]
+
+      // Si no hay entrada en el idioma objetivo y no es inglés, intentamos traducir
+      let finalDescription = rawDesc;
+      let maybeTranslated: string | null = null;
+
+      if (!entryTarget && targetLang !== 'en') {
+        maybeTranslated = await translateWithGemini(rawDesc, targetLang);
+      }
+
+      finalDescription = maybeTranslated || rawDesc;
+      setTranslatedDescription(maybeTranslated || null);
 
       const evolutionChain = await parseEvolutionChain(speciesData.evolution_chain.url);
       const varieties = await fetchVarieties(speciesData.id, detailsData.id);
@@ -85,17 +131,14 @@ export default function PokemonDetail() {
         baseStat: stat.base_stat
       }));
 
-      // Extraer URLs de imágenes relevantes
+      // Recopilar URLs de imágenes
       const artworkDefault = detailsData.sprites?.other?.['official-artwork']?.front_default || null;
       const artworkShiny = detailsData.sprites?.other?.['official-artwork']?.front_shiny || null;
-
       const spriteDefault = detailsData.sprites?.front_default || null;
       const spriteShiny = detailsData.sprites?.front_shiny || null;
-
       const animatedRoot = detailsData.sprites?.versions?.['generation-v']?.['black-white']?.animated;
       const animatedDefault = animatedRoot?.front_default || null;
-      // Algunas especies tienen shiny animado, otras no:
-      const animatedShiny = animatedRoot?.front_shiny || null; // si no existe, será null
+      const animatedShiny = animatedRoot?.front_shiny || null; // puede no existir [web:63][web:44]
 
       setPokemon({
         id: detailsData.id,
@@ -103,8 +146,8 @@ export default function PokemonDetail() {
         types: detailsData.types.map((t: any) => t.type.name),
         height: detailsData.height / 10,
         weight: detailsData.weight / 10,
-        description: description,
-        stats: stats,
+        description: finalDescription,
+        stats,
         cry: detailsData.cries?.latest || detailsData.cries?.legacy || '',
         evolutionChain,
         varieties,
@@ -163,7 +206,7 @@ export default function PokemonDetail() {
   const fetchVarieties = async (speciesId: number, pokemonId: number): Promise<Variety[]> => {
     try {
       const response = await fetch(`https://pokeapi.co/api/v2/pokemon-species/${speciesId}`);
-      const data = await response.json();
+    const data = await response.json();
 
       const varieties: Variety[] = [];
 
@@ -234,7 +277,7 @@ export default function PokemonDetail() {
       fairy: 'bg-pink-400'
     };
     return typeColors[type] || 'bg-gray-400';
-  };
+  }; // Map de colores por tipo para consistencia UI [web:22]
 
   const getCardColor = (types: string[]): string => {
     const mainType = types[0];
@@ -258,9 +301,9 @@ export default function PokemonDetail() {
       fairy: 'bg-pink-100'
     };
     return cardColors[mainType] || 'bg-stone-200';
-  };
+  }; // Fondo de card por tipo principal [web:22]
 
-  // Decide la URL de imagen actual según viewMode e isShiny, con fallbacks
+  // Selección de imagen actual con fallbacks según viewMode e isShiny
   const currentImage = useMemo(() => {
     if (!pokemon) return null;
 
@@ -284,26 +327,25 @@ export default function PokemonDetail() {
 
     // animated
     if (isShiny) {
-      // shiny animado puede no existir; fallback a sprite shiny o animado normal
       return animatedShiny || spriteShiny || animatedDefault || spriteDefault || artworkShiny || artworkDefault;
     } else {
       return animatedDefault || spriteDefault || artworkDefault || spriteShiny || artworkShiny;
     }
-  }, [pokemon, viewMode, isShiny]); // [web:44][web:63][web:129]
+  }, [pokemon, viewMode, isShiny]); // Selección robusta de imagen con respaldo [web:44][web:63]
 
   const cyclePrevMode = () => {
     const order: ViewMode[] = ['artwork', 'sprite', 'animated'];
     const idx = order.indexOf(viewMode);
     const prev = idx === 0 ? order[order.length - 1] : order[idx - 1];
     setViewMode(prev);
-  };
+  }; // Flecha izquierda para cambiar modo [web:22]
 
   const cycleNextMode = () => {
     const order: ViewMode[] = ['artwork', 'sprite', 'animated'];
     const idx = order.indexOf(viewMode);
     const next = idx === order.length - 1 ? order[0] : order[idx + 1];
     setViewMode(next);
-  };
+  }; // Flecha derecha para cambiar modo [web:22]
 
   if (loading) {
     return (
@@ -424,7 +466,7 @@ export default function PokemonDetail() {
         <Text className="text-white text-lg font-extrabold mb-2">Descripción</Text>
         <View className="bg-white rounded-lg p-3">
           <Text className="text-gray-800 text-sm leading-5">
-            {pokemon.description}
+            {translatedDescription ?? pokemon.description}
           </Text>
         </View>
       </View>
@@ -494,7 +536,7 @@ export default function PokemonDetail() {
                       #{variety.speciesId.toString().padStart(3, '0')}
                     </Text>
                     <Text className="text-gray-600 text-xs font-semibold capitalize text-center mb-1">
-                      {variety.name.replace(/-/g, ' ').replace(/^.*\\s/, '')}
+                      {variety.name.replace(/-/g, ' ').replace(/^.*\s/, '')}
                     </Text>
                     <Image
                       source={{ uri: variety.sprite }}
