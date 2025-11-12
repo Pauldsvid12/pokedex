@@ -4,6 +4,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { Ionicons } from '@expo/vector-icons';
 import { Audio } from 'expo-av';
 import PokemonStats from '../../components/ui/PokemonStats';
+import { useCurrentPokemon } from '../../context/CurrentPokemonContext';
 
 interface Pokemon {
   id: number;
@@ -55,11 +56,14 @@ export default function PokemonDetail() {
   const [playingSound, setPlayingSound] = useState(false);
 
   // Traducción con Gemini (idioma objetivo configurable)
-  const [targetLang, setTargetLang] = useState<'es'|'en'|'fr'|'pt'>('es'); // por defecto español [web:22]
+  const [targetLang, setTargetLang] = useState<'es'|'en'|'fr'|'pt'>('es');
   const [translatedDescription, setTranslatedDescription] = useState<string | null>(null);
   const GEMINI_KEY = process.env.EXPO_PUBLIC_GEMINI_API_KEY || '';
   const GEMINI_MODEL = 'gemini-2.0-flash';
-  const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_KEY}`; // [web:138]
+  const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_KEY}`;
+
+  // Publicar contexto para IA en pantalla
+  const { setCurrent } = useCurrentPokemon();
 
   useEffect(() => {
     fetchPokemonDetails();
@@ -67,9 +71,16 @@ export default function PokemonDetail() {
     setIsShiny(false);
   }, [id]);
 
+  // Publica al contexto cuando cambie el Pokémon cargado
+  useEffect(() => {
+    if (pokemon) {
+      setCurrent({ id: pokemon.id, name: pokemon.name, types: pokemon.types });
+    }
+  }, [pokemon]);
+
   const cleanFlavor = (txt: string) => {
     return txt.replace(/\f/g, ' ').replace(/\u000c/g, ' ').replace(/\n/g, ' ').replace(/\s+/g, ' ').trim();
-  }; // Limpia caracteres de control y normaliza espacios para mejor legibilidad [web:135]
+  };
 
   const translateWithGemini = async (text: string, to: string) => {
     if (!GEMINI_KEY) return null;
@@ -90,7 +101,7 @@ export default function PokemonDetail() {
     } catch {
       return null;
     }
-  }; // Traducción vía API de Gemini para cubrir especies sin flavor en el idioma objetivo [web:138]
+  };
 
   const fetchPokemonDetails = async () => {
     try {
@@ -98,10 +109,10 @@ export default function PokemonDetail() {
       setTranslatedDescription(null);
 
       const detailsResponse = await fetch(`https://pokeapi.co/api/v2/pokemon/${id}`);
-      const detailsData = await detailsResponse.json(); // [web:38]
+      const detailsData = await detailsResponse.json();
 
       const speciesResponse = await fetch(detailsData.species.url);
-      const speciesData = await speciesResponse.json(); // [web:22]
+      const speciesData = await speciesResponse.json();
 
       // Selección de flavor según idioma objetivo con fallback
       const flavorEntries = speciesData.flavor_text_entries || [];
@@ -110,7 +121,7 @@ export default function PokemonDetail() {
       const entryAny = flavorEntries[0];
 
       let rawDesc = entryTarget?.flavor_text || entryEn?.flavor_text || entryAny?.flavor_text || 'Sin descripción disponible';
-      rawDesc = cleanFlavor(rawDesc); // [web:135]
+      rawDesc = cleanFlavor(rawDesc);
 
       // Si no hay entrada en el idioma objetivo y no es inglés, intentamos traducir
       let finalDescription = rawDesc;
@@ -138,7 +149,7 @@ export default function PokemonDetail() {
       const spriteShiny = detailsData.sprites?.front_shiny || null;
       const animatedRoot = detailsData.sprites?.versions?.['generation-v']?.['black-white']?.animated;
       const animatedDefault = animatedRoot?.front_default || null;
-      const animatedShiny = animatedRoot?.front_shiny || null; // puede no existir [web:63][web:44]
+      const animatedShiny = animatedRoot?.front_shiny || null; // puede no existir
 
       setPokemon({
         id: detailsData.id,
@@ -206,7 +217,7 @@ export default function PokemonDetail() {
   const fetchVarieties = async (speciesId: number, pokemonId: number): Promise<Variety[]> => {
     try {
       const response = await fetch(`https://pokeapi.co/api/v2/pokemon-species/${speciesId}`);
-    const data = await response.json();
+      const data = await response.json();
 
       const varieties: Variety[] = [];
 
@@ -277,7 +288,7 @@ export default function PokemonDetail() {
       fairy: 'bg-pink-400'
     };
     return typeColors[type] || 'bg-gray-400';
-  }; // Map de colores por tipo para consistencia UI [web:22]
+  };
 
   const getCardColor = (types: string[]): string => {
     const mainType = types[0];
@@ -301,9 +312,9 @@ export default function PokemonDetail() {
       fairy: 'bg-pink-100'
     };
     return cardColors[mainType] || 'bg-stone-200';
-  }; // Fondo de card por tipo principal [web:22]
+  };
 
-  // Selección de imagen actual con fallbacks según viewMode e isShiny
+  //Seleccion de imagen actual con fallbacks según viewMode e isShiny
   const currentImage = useMemo(() => {
     if (!pokemon) return null;
 
@@ -331,21 +342,21 @@ export default function PokemonDetail() {
     } else {
       return animatedDefault || spriteDefault || artworkDefault || spriteShiny || artworkShiny;
     }
-  }, [pokemon, viewMode, isShiny]); // Selección robusta de imagen con respaldo [web:44][web:63]
+  }, [pokemon, viewMode, isShiny]);
 
   const cyclePrevMode = () => {
     const order: ViewMode[] = ['artwork', 'sprite', 'animated'];
     const idx = order.indexOf(viewMode);
     const prev = idx === 0 ? order[order.length - 1] : order[idx - 1];
     setViewMode(prev);
-  }; // Flecha izquierda para cambiar modo [web:22]
+  };
 
   const cycleNextMode = () => {
     const order: ViewMode[] = ['artwork', 'sprite', 'animated'];
     const idx = order.indexOf(viewMode);
     const next = idx === order.length - 1 ? order[0] : order[idx + 1];
     setViewMode(next);
-  }; // Flecha derecha para cambiar modo [web:22]
+  };
 
   if (loading) {
     return (
