@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { View, Text, TextInput, TouchableOpacity, ScrollView, ActivityIndicator, KeyboardAvoidingView, Platform, Image } from "react-native";
+import { GoogleGenAI } from '@google/genai';
 
 const exampleSuggestions = [
   "¿Cuáles son las evoluciones de Pikachu?",
@@ -16,9 +17,10 @@ export default function Chatbot() {
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
 
-  const API_KEY = process.env.EXPO_PUBLIC_GEMINI_API_KEY || "";
+  const API_KEY = process.env.EXPO_PUBLIC_GEMINI_API_KEY || "AIzaSyCuIoY6RqdNcEpb4P3i1fI5uu-y9iXHAgU";
   const MODEL = "gemini-2.0-flash";
-  const URL = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${API_KEY}`;
+
+  const ai = new GoogleGenAI({ apiKey: API_KEY });
 
   // Efecto “escribiendo” rápido
   useEffect(() => {
@@ -30,8 +32,8 @@ export default function Chatbot() {
         if (cancel) return;
         setTypingText(responseText.slice(0, i));
         if (i < responseText.length) {
-          i += 3;                 // ~3 caracteres por tick
-          setTimeout(step, 15);   // 15 ms por tick => rápido
+          i += 3;                  // ~3 caracteres por tick
+          setTimeout(step, 15);    // 15 ms por tick => rápido
         } else {
           setTypingText(responseText);
         }
@@ -59,27 +61,16 @@ export default function Chatbot() {
         // Mantengo tu rama por si luego activas imágenes; ahora devolverá mensaje
         setErrorMsg("La generación de imágenes está desactivada por ahora.");
       } else {
-        const res = await fetch(URL, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            contents: [
-              {
-                role: "user",
-                parts: [{ text: prompt }],
-              },
-            ],
-          }),
+        const response = await ai.models.generateContent({
+          model: MODEL,
+          contents: [
+            {
+              role: "user",
+              parts: [{ text: prompt }],
+            },
+          ],
         });
-
-        const data = await res.json();
-        const blocked = data?.promptFeedback?.blockReason;
-        if (blocked) {
-          setErrorMsg(`Prompt bloqueado por seguridad: ${blocked}`);
-          setLoading(false);
-          return;
-        }
-        const text = data?.candidates?.[0]?.content?.parts?.[0]?.text || "";
+        const text = response.text || "";
         if (!text) {
           setErrorMsg("No se recibió texto del modelo.");
           setLoading(false);

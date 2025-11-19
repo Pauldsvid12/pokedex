@@ -5,6 +5,8 @@ import GenerationModal from '../components/ui/GenerationModal';
 import TypeModal from '../components/ui/TypeModal';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
+import axios from 'axios';
+import { GoogleGenAI } from '@google/genai';
 
 interface Pokemon {
   id: number;
@@ -40,6 +42,27 @@ export default function Index() {
 
   const router = useRouter();
 
+  // ---------- INTEGRACIÓN GOOGLE GENAI ----------
+  const geminiApiKey = "AIzaSyCuIoY6RqdNcEpb4P3i1fI5uu-y9iXHAgU"; 
+
+  // Instancia para Gemini
+  const ai = new GoogleGenAI({ apiKey: geminiApiKey });
+
+  const consultaGemini = async (texto: string) => {
+    try {
+      const response = await ai.models.generateContent({
+        model: 'gemini-2.5-flash',
+        contents: texto,
+      });
+      return response.text;
+    } catch (error) {
+      return "Error consultando IA";
+    }
+  };
+  // Ejemplo de uso: llama consultaGemini("¿Cómo capturar un Mewtwo?") y muestra el resultado donde lo necesites
+
+  // -----------------------------------------------
+
   // Cargar favoritos/capturados
   useEffect(() => {
     (async () => {
@@ -50,13 +73,13 @@ export default function Index() {
         if (capRaw) setCaptured(new Set(JSON.parse(capRaw)));
       } catch {}
     })();
-  }, []); // Persistencia con AsyncStorage recomendada para estado simple local
+  }, []);
 
   const persistSets = async (key: 'favorites' | 'captured', setObj: Set<number>) => {
     try {
       await AsyncStorage.setItem(key, JSON.stringify(Array.from(setObj)));
     } catch {}
-  }; // Guardar cambios en almacenamiento local para mantener el estado entre sesiones
+  };
 
   const toggleFavorite = (id: number) => {
     setFavorites(prev => {
@@ -65,7 +88,7 @@ export default function Index() {
       persistSets('favorites', next);
       return next;
     });
-  }; // Alternar favorito para cada Pokémon con clave por id y persistencia local
+  };
 
   const toggleCaptured = (id: number) => {
     setCaptured(prev => {
@@ -74,15 +97,15 @@ export default function Index() {
       persistSets('captured', next);
       return next;
     });
-  }; // Alternar capturado con persistencia para listas de progreso del usuario
+  };
 
   useEffect(() => {
     fetchPokemons();
-  }, []); // Carga inicial del catálogo de Pokémon desde PokéAPI con límite 1025
+  }, []);
 
   useEffect(() => {
     filterPokemons();
-  }, [searchQuery, selectedGeneration, selectedType, pokemons, showOnlyFavorites, showOnlyCaptured, favorites, captured]); // Recalcular listado visible cuando cambian filtros o estados de favoritos/capturados.[web:41]
+  }, [searchQuery, selectedGeneration, selectedType, pokemons, showOnlyFavorites, showOnlyCaptured, favorites, captured]);
 
   const getTypeColor = (type: string): string => {
     const typeColors: { [key: string]: string } = {
@@ -105,7 +128,7 @@ export default function Index() {
       fairy: 'bg-pink-400'
     };
     return typeColors[type] || 'bg-gray-400';
-  }; // Colores de etiquetas por tipo para consistencia visual en las cards
+  };
 
   const getCardColor = (types: string[]): string => {
     const mainType = types[0];
@@ -129,51 +152,50 @@ export default function Index() {
       fairy: 'bg-pink-100'
     };
     return cardColors[mainType] || 'bg-stone-200';
-  }; // Fondo de tarjeta basado en el primer tipo para diferenciar visualmente
+  };
 
-  // Selección de imagen por modo para la LISTA (no para detalle)
   const pickImageByMode = (detailsData: any): string | null => {
     switch (viewStyle) {
       case 'artwork':
         return detailsData.sprites?.other?.['official-artwork']?.front_default
           || detailsData.sprites?.front_default
-          || null; // Fallback a sprite estático si no hay artwork
+          || null;
       case 'artwork-shiny':
         return detailsData.sprites?.other?.['official-artwork']?.front_shiny
           || detailsData.sprites?.front_shiny
           || detailsData.sprites?.other?.['official-artwork']?.front_default
           || detailsData.sprites?.front_default
-          || null; // Fallback hacia variantes disponibles si falta shiny
+          || null;
       case 'sprite':
         return detailsData.sprites?.front_default
           || detailsData.sprites?.other?.['official-artwork']?.front_default
-          || null; // Sprite base o artwork como respaldo
+          || null;
       case 'sprite-shiny':
         return detailsData.sprites?.front_shiny
           || detailsData.sprites?.front_default
           || detailsData.sprites?.other?.['official-artwork']?.front_shiny
           || detailsData.sprites?.other?.['official-artwork']?.front_default
-          || null; // Alternativas si no existe shiny
+          || null;
       case 'sprite-animated':
         return detailsData.sprites?.versions?.['generation-v']?.['black-white']?.animated?.front_default
           || detailsData.sprites?.front_default
           || detailsData.sprites?.other?.['official-artwork']?.front_default
-          || null; // Animado Gen V o fallback a sprite/artwork
+          || null;
       default:
-        return detailsData.sprites?.other?.['official-artwork']?.front_default || null; // Predeterminado a artwork
+        return detailsData.sprites?.other?.['official-artwork']?.front_default || null;
     }
-  }; // Esta elección reduce saltos visuales y aprovecha campos comunes de PokéAPI
+  };
 
   const fetchPokemons = async () => {
     try {
-      const response = await fetch('https://pokeapi.co/api/v2/pokemon?limit=1025');
-      const data = await response.json();
+      const response = await axios.get('https://pokeapi.co/api/v2/pokemon?limit=1025');
+      const data = response.data;
 
       const pokemonDetails = await Promise.all(
         data.results.map(async (pokemon: any) => {
           try {
-            const details = await fetch(pokemon.url);
-            const detailsData = await details.json();
+            const detailsResponse = await axios.get(pokemon.url);
+            const detailsData = detailsResponse.data;
 
             if (detailsData.id >= 1 && detailsData.id <= 1025) {
               const generation = Math.ceil(detailsData.id / 151);
@@ -183,7 +205,7 @@ export default function Index() {
                 name: detailsData.name,
                 types: detailsData.types.map((t: any) => t.type.name),
                 sprite: spriteUrl,
-                generation: generation
+                generation: generation,
               };
             }
             return null;
@@ -201,7 +223,7 @@ export default function Index() {
       console.error('Error fetching pokemons:', error);
       setLoading(false);
     }
-  }; // Descarga el listado y decide la imagen en base a viewStyle en el momento del fetch
+  };
 
   const filterPokemons = () => {
     let result = pokemons;
@@ -211,26 +233,26 @@ export default function Index() {
         pokemon.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
         pokemon.id.toString().includes(searchQuery)
       );
-    } // Búsqueda por nombre o id para acceso rápido.
+    }
 
     if (selectedGeneration !== null) {
       result = result.filter(pokemon => pokemon.generation === selectedGeneration);
-    } // Filtrado por generación basado en regla simple del id para experiencia fluida.
+    }
 
     if (selectedType !== null) {
       result = result.filter(pokemon => pokemon.types.includes(selectedType));
-    } // Filtrado por tipo reutilizando la lista ya normalizada
+    }
 
     if (showOnlyFavorites) {
       result = result.filter(p => favorites.has(p.id));
-    } // Mostrar sólo favoritos cuando el chip está activo
+    }
 
     if (showOnlyCaptured) {
       result = result.filter(p => captured.has(p.id));
-    } // Mostrar sólo capturados cuando el chip está activo
+    }
 
     setFilteredPokemons(result);
-  }; // Mantiene el estado derivado actualizado en la lista visible con todos los filtros
+  };
 
   const renderPokemonCard = ({ item }: { item: Pokemon }) => (
     <TouchableOpacity onPress={() => router.push(`/pokemon/${item.id}`)}>
@@ -291,7 +313,7 @@ export default function Index() {
         </View>
       </View>
     </TouchableOpacity>
-  ); // Tarjeta con nombre, tipos, imagen y controles de favorito/capturado en una fila limpia.[web:22]
+  );
 
   if (loading) {
     return (
@@ -302,7 +324,7 @@ export default function Index() {
         </Text>
       </View>
     );
-  } // Estado de carga con indicador para experiencia fluida al entrar a la app.[web:41]
+  }
 
   return (
     <View className="flex-1 bg-red-500">

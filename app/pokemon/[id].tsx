@@ -5,6 +5,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { Audio } from 'expo-av';
 import PokemonStats from '../../components/ui/PokemonStats';
 import { useCurrentPokemon } from '../../context/CurrentPokemonContext';
+import { GoogleGenAI } from '@google/genai';
 
 interface Pokemon {
   id: number;
@@ -50,19 +51,18 @@ export default function PokemonDetail() {
   const [pokemon, setPokemon] = useState<Pokemon | null>(null);
   const [loading, setLoading] = useState(true);
 
-  // Estilo de visualización y shiny
   const [viewMode, setViewMode] = useState<ViewMode>('artwork');
   const [isShiny, setIsShiny] = useState(false);
   const [playingSound, setPlayingSound] = useState(false);
 
-  // Traducción con Gemini (idioma objetivo configurable)
-  const [targetLang, setTargetLang] = useState<'es'|'en'|'fr'|'pt'>('es');
-  const [translatedDescription, setTranslatedDescription] = useState<string | null>(null);
-  const GEMINI_KEY = process.env.EXPO_PUBLIC_GEMINI_API_KEY || '';
+  const GEMINI_KEY = "AIzaSyCuIoY6RqdNcEpb4P3i1fI5uu-y9iXHAgU";
   const GEMINI_MODEL = 'gemini-2.0-flash';
-  const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_KEY}`;
 
-  // Publicar contexto para IA en pantalla
+  const ai = new GoogleGenAI({ apiKey: GEMINI_KEY });
+
+  const [targetLang, setTargetLang] = useState<'es' | 'en' | 'fr' | 'pt'>('es');
+  const [translatedDescription, setTranslatedDescription] = useState<string | null>(null);
+
   const { setCurrent } = useCurrentPokemon();
 
   useEffect(() => {
@@ -71,7 +71,6 @@ export default function PokemonDetail() {
     setIsShiny(false);
   }, [id]);
 
-  // Publica al contexto cuando cambie el Pokémon cargado
   useEffect(() => {
     if (pokemon) {
       setCurrent({ id: pokemon.id, name: pokemon.name, types: pokemon.types });
@@ -86,17 +85,13 @@ export default function PokemonDetail() {
     if (!GEMINI_KEY) return null;
     try {
       const prompt = `Traduce al idioma objetivo manteniendo tono enciclopédico y neutro.\nIdioma objetivo: ${to}\nTexto:\n${text}`;
-      const res = await fetch(GEMINI_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{ role: 'user', parts: [{ text: prompt }] }]
-        })
+
+      const response = await ai.models.generateContent({
+        model: GEMINI_MODEL,
+        contents: [{ role: 'user', parts: [{ text: prompt }] }]
       });
-      const data = await res.json();
-      const blocked = data?.promptFeedback?.blockReason;
-      if (blocked) return null;
-      const out = data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+
+      const out = response.text?.trim();
       return out || null;
     } catch {
       return null;
@@ -114,7 +109,6 @@ export default function PokemonDetail() {
       const speciesResponse = await fetch(detailsData.species.url);
       const speciesData = await speciesResponse.json();
 
-      // Selección de flavor según idioma objetivo con fallback
       const flavorEntries = speciesData.flavor_text_entries || [];
       const entryTarget = flavorEntries.find((e: any) => e.language?.name === targetLang);
       const entryEn = flavorEntries.find((e: any) => e.language?.name === 'en');
@@ -123,7 +117,6 @@ export default function PokemonDetail() {
       let rawDesc = entryTarget?.flavor_text || entryEn?.flavor_text || entryAny?.flavor_text || 'Sin descripción disponible';
       rawDesc = cleanFlavor(rawDesc);
 
-      // Si no hay entrada en el idioma objetivo y no es inglés, intentamos traducir
       let finalDescription = rawDesc;
       let maybeTranslated: string | null = null;
 
@@ -142,14 +135,13 @@ export default function PokemonDetail() {
         baseStat: stat.base_stat
       }));
 
-      // Recopilar URLs de imágenes
       const artworkDefault = detailsData.sprites?.other?.['official-artwork']?.front_default || null;
       const artworkShiny = detailsData.sprites?.other?.['official-artwork']?.front_shiny || null;
       const spriteDefault = detailsData.sprites?.front_default || null;
       const spriteShiny = detailsData.sprites?.front_shiny || null;
       const animatedRoot = detailsData.sprites?.versions?.['generation-v']?.['black-white']?.animated;
       const animatedDefault = animatedRoot?.front_default || null;
-      const animatedShiny = animatedRoot?.front_shiny || null; // puede no existir
+      const animatedShiny = animatedRoot?.front_shiny || null;
 
       setPokemon({
         id: detailsData.id,
@@ -170,6 +162,7 @@ export default function PokemonDetail() {
         animatedShiny,
         speciesId: speciesData.id
       });
+
       setLoading(false);
     } catch (error) {
       console.error('Error fetching pokemon details:', error);
@@ -239,7 +232,6 @@ export default function PokemonDetail() {
           console.error('Error fetching variety:', error);
         }
       }
-
       return varieties;
     } catch (error) {
       console.error('Error fetching varieties:', error);
@@ -314,7 +306,6 @@ export default function PokemonDetail() {
     return cardColors[mainType] || 'bg-stone-200';
   };
 
-  //Seleccion de imagen actual con fallbacks según viewMode e isShiny
   const currentImage = useMemo(() => {
     if (!pokemon) return null;
 
@@ -336,7 +327,6 @@ export default function PokemonDetail() {
         : (spriteDefault || artworkDefault || spriteShiny || artworkShiny);
     }
 
-    // animated
     if (isShiny) {
       return animatedShiny || spriteShiny || animatedDefault || spriteDefault || artworkShiny || artworkDefault;
     } else {
